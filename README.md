@@ -65,6 +65,22 @@ python scripts/casebook.py all <input> --out <output-dir> --narrative <narrative
 
 ## 安装 / Install
 
+### DSH 插件市场（推荐 / Recommended）
+
+在 DSH 的发现页 / 市场设置中添加本仓库的索引 URL：
+
+```text
+https://raw.githubusercontent.com/ljh718/agent-run-casebook/main/dsh-market/index.json
+```
+
+国内网络拉取失败时，使用 jsDelivr 镜像索引：
+
+```text
+https://cdn.jsdelivr.net/gh/ljh718/agent-run-casebook@main/dsh-market/index.json
+```
+
+添加后在列表中选择「Agent 运行报告生成器 / Agent Run Casebook」安装。索引拉取失败或想离线安装时，可用 Release 中的 tarball 或仓库内 `dsh-bundle/` 目录直接安装，详见 `DSH-MARKET.md`。
+
 ### WorkBuddy
 
 将 `agent-run-casebook/` 目录复制到：
@@ -73,7 +89,7 @@ python scripts/casebook.py all <input> --out <output-dir> --narrative <narrative
 ~/.workbuddy/skills/agent-run-casebook
 ```
 
-### DSH
+### DSH（手动复制）
 
 任选一个用户级位置：
 
@@ -90,7 +106,7 @@ python scripts/casebook.py all <input> --out <output-dir> --narrative <narrative
 
 ### 开放平台 / Open Platform
 
-上传 `agent-run-casebook-v1.0.1.zip` 到 WorkBuddy 开放平台；ZIP 解压后第一层应为 `agent-run-casebook/`。
+上传 `agent-run-casebook-openplatform-v1.2.1.zip` 到 WorkBuddy 开放平台；ZIP 解压后第一层应为 `agent-run-casebook/`。
 
 ## 目录结构
 
