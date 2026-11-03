@@ -1,0 +1,13 @@
+{
+  "comment": "agent-run-casebook CLI 回归集：good 全过（exit 0 且三件产物齐），bad 逐条命中期望退出码且不落盘产物。违规样例仅存在于 tests/fixtures/ 下。",
+  "cases": [
+    {"name": "good-bugfix", "input": "tests/fixtures/good/bugfix/input.jsonl", "expect_exit": 0},
+    {"name": "good-research", "input": "tests/fixtures/good/research/input.md", "expect_exit": 0},
+    {"name": "good-data-zip", "input": "tests/fixtures/good/data/export.zip", "expect_exit": 0},
+    {"name": "bad-malformed-jsonl", "input": "tests/fixtures/bad/malformed.jsonl", "expect_exit": 3},
+    {"name": "bad-unknown-format", "input": "tests/fixtures/bad/unknown-format.txt", "expect_exit": 3},
+    {"name": "bad-narrative-violation", "input": "tests/fixtures/bad/narrative-violation/input.jsonl", "narrative": "tests/fixtures/bad/narrative-violation/narrative.json", "expect_exit": 4},
+    {"name": "bad-html-inject-escaped", "input": "tests/fixtures/bad/html-inject.jsonl", "expect_exit": 0},
+    {"name": "bad-leak-marker", "input": "tests/fixtures/bad/leak-marker.jsonl", "expect_exit": 5}
+  ]
+}

@@ -1,0 +1,9 @@
+# agent-run-casebook 依赖声明
+
+# 必需依赖：无 —— 仅使用 Python 标准库
+# （json / re / zipfile / hashlib / html / argparse / unittest / datetime / pathlib）
+# 最低运行时：Python 3.10+
+
+# 可选增强：无
+# 说明：本技能不解析 YAML frontmatter，运行时无需 PyYAML 即可完整工作；
+# 结构合规校验由外部工坊校验器负责，与本技能运行时无关。

@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# 运行产物不进入仓库；示例只保留输入与说明
+casebook.html
+casebook.md
+run.json
+run.raw.json
+*.report.json
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+desktop.ini

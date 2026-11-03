@@ -1,0 +1,14 @@
+{
+  "title": "解析告警修复复盘",
+  "summary": "本轮修复了 parser.py，并额外生成了 brand-new-report.py，全流程已复验。",
+  "key_nodes": [
+    {
+      "ref": "step-99",
+      "heading": "不存在的步骤",
+      "blurb": "引用了不存在的节点"
+    }
+  ],
+  "reader_notes": [
+    "读者可复核每个锚点"
+  ]
+}

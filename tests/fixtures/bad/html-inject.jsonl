@@ -1,0 +1,2 @@
+{"type": "user", "text": "测试转义：请把下面文本原样记录", "ts": "2026-03-03T10:00:00"}
+{"type": "assistant", "text": "记录到本地：<script>alert('xss')</script> 与 <img src=x onerror=alert(1)>，以及 <a href=\"javascript:alert(2)\">链接样例</a>。", "ts": "2026-03-03T10:01:00"}

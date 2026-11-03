@@ -1,0 +1,108 @@
+/* agent-run-casebook 离线样式：单栏、系统字体栈、纯装饰自由度。
+   约束：不含任何外部资源引用与导入语句；证据徽标四档配色见下。 */
+:root {
+  --bg: #f5f6f8;
+  --fg: #1d2430;
+  --muted: #5b6472;
+  --line: #d9dee6;
+  --card: #ffffff;
+  --green: #177245;
+  --red: #b3261e;
+  --gray: #5b6472;
+  --blue: #1c5fb8;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.65 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 28px 16px 48px; }
+h1 { font-size: 24px; margin: 0 0 6px; }
+h2 { font-size: 18px; margin: 30px 0 10px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+h3 { font-size: 15px; margin: 14px 0 6px; }
+p { margin: 6px 0; }
+.muted { color: var(--muted); font-size: 13px; }
+.mono, code {
+  font-family: Consolas, Menlo, "Courier New", monospace;
+  font-size: 13px;
+  background: #eceff3;
+  padding: 1px 5px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: Consolas, Menlo, monospace;
+  font-size: 13px;
+  background: #eceff3;
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin: 6px 0;
+}
+.badge {
+  display: inline-block;
+  padding: 1px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--gray);
+  color: var(--gray);
+  background: var(--card);
+  white-space: nowrap;
+}
+.b-verified  { color: var(--green); border-color: var(--green); background: #e7f4ec; }
+.b-failed    { color: var(--red);   border-color: var(--red);   background: #faeae9; }
+.b-tool      { color: var(--blue);  border-color: var(--blue);  background: #e9f0fa; }
+.b-unverified, .b-self { color: var(--gray); border-color: var(--gray); background: #eef0f3; }
+.b-delivered { color: var(--blue);  border-color: var(--blue);  background: #e9f0fa; }
+.badges { margin: 8px 0; }
+.badges .badge { margin-right: 6px; }
+.chip {
+  display: inline-block;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 10px;
+  margin: 2px 6px 2px 0;
+  font-size: 13px;
+}
+section.card, .card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 10px 0;
+}
+table { width: 100%; border-collapse: collapse; background: var(--card); font-size: 13px; }
+th, td { border: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: top; }
+th { background: #eef1f5; }
+details {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  margin: 8px 0;
+  padding: 8px 12px;
+}
+summary { cursor: pointer; font-weight: 600; }
+ol, ul { margin: 6px 0; padding-left: 24px; }
+li { margin: 4px 0; }
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:target { outline: 3px solid #e8a13a; outline-offset: 2px; border-radius: 4px; }
+footer {
+  margin-top: 34px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.banner {
+  background: #fdf3e2;
+  border: 1px solid #e8a13a;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 10px 0;
+  font-size: 13px;
+}
