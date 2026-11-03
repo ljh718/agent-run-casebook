@@ -2,7 +2,7 @@
 
 发布日期：2026-11-03
 上一版本：v1.0.2
-QA 结论：**通过**（外部缺陷修复复测报告 §11 R4 轮，2026-11-03）
+QA 结论：**通过**（外部缺陷修复复测报告 §12 最终冻结版聚焦复测，2026-11-03；§10/§11 为历史复测轮次，§12 为最终有效验证记录）
 
 本版本修复了外部缺陷报告（基于 v1.0.2）中的全部 P0/P1/P2 共 11 项问题，并关闭了复测过程中新发现的 F-1/F-2 与三个次要项。全程未新增功能面，属缺陷修复与加固版本。
 
@@ -28,19 +28,21 @@ QA 结论：**通过**（外部缺陷修复复测报告 §11 R4 轮，2026-11-03
 
 ## 复测中发现并关闭的问题
 
-- **F-1（高·阻断）**：claim 句读在 URL 的 `?` 处切分，query 凭据（如 `access_token=abc123`）脱离 URL 形态逃过脱敏进入可分享产物。修复：句读切分前对 URL 子串做占位保护，从源头保证 URL 完整性；`access_token` / `sid=x1~x3` 等残留实测为 0。另新增 `R-SUS-URLKEY` 宽探测作为纵深兜底（keep-urls 档保留风险键 query 时 exit 5，文档化 fail-closed 行为）。
+- **F-1（高·阻断）**：claim 句读在 URL 的 `?` 处切分，query 凭据（如 `access_token=abc123`）脱离 URL 形态逃过脱敏进入可分享产物。修复：句读切分前对 URL 子串做占位保护，从源头保证 URL 完整性；`access_token` / `sid=x1~x3` 等残留实测为 0。另新增 `R-SUS-URLKEY`（高风险 query key 纵深兜底）与 `R-URL-CREDREST`（--no-urls 档 cred URL 残体整体抹除）两条规则，QA §12 已覆盖确认其实现与行为。
 - **F-2（中）**：`--no-urls` 档被自身审计明细中的 `https://` scheme 假阳性卡死（正当输入 exit 5 被拒）。修复：details 的 replacement scheme 统一掩码为 `[SCHEME]://`，复检不再自触发。
 - **M-1**：`all` 汇总行警告计数与 run.json 的 PII_SUSPECTED 口径对齐。
 - **M-2**：分步流程的报告覆盖语义修正（build 不覆盖已有含原文报告），SKILL.md 与 api_reference.md 同步口径。
 - **M-3**：api_reference.md 注明 details.offset 为"规则应用时文本坐标（信息性）"与 `[SCHEME]://` 掩码。
 
-## QA R4 终态基线（全部实跑 exit 0）
+## QA §12 终态基线（最终冻结版聚焦复测，全部实跑 exit 0）
 
-- `python -m unittest discover -s tests -v`：**185 例 OK**
+- `python -m unittest discover -s tests -v`：**185 例 OK**（182→185 的 3 项差异已由 QA 逐名核对，全部为 F-1 兜底/验收向量，与实现方声明吻合）
 - `python scripts/casebook.py --selftest`：全部 PASS
 - `python scripts/casebook.py --fixtures`：回归全过（8 例）
 - marketplace 校验器（`--platform workbuddy --channel marketplace`）：通过（6 条 W-UNKNOWN-FIELD 为校验器词表滞后，人工复核可接受）
-- 三示例双跑 `diff -r` 逐字节一致；t01/t02/cite2/cite3/u3/t09 对抗样本全部达标，未发现泄漏路径
+- 三示例双跑 `diff -r` 逐字节一致；t01/t02/cite2/cite3/u3/t09/t12 对抗样本全部达标，未发现泄漏路径
+- 四模式（default / --no-strict-pii / --no-urls / --keep-urls）行为与文档口径一致；`--keep-urls` 采用已追认的方案 (b)：普通 query 可保留，高风险 query key 默认 strict exit 5，仅 `--no-strict-pii` 放行并记警告
+- **§12 结论：最终冻结版聚焦复测通过，允许 Phase 5 打包**
 
 ## 已知限制（不阻断）
 
