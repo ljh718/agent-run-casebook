@@ -31,7 +31,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/ljh718/agent-run-casebook",
-            "commit": "0000000000000000000000000000000000000000",
+            "commit": "584b5f92b80a4068d9b107f4c1e72c31a1c402f8",
             "path": "dsh-bundle"
           }
         }
