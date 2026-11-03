@@ -14,7 +14,7 @@ import hashlib
 
 SCHEMA_VERSION = "1.0.0"
 GENERATOR_NAME = "agent-run-casebook"
-GENERATOR_VERSION = "1.1.0"
+GENERATOR_VERSION = "1.2.0"
 
 # ── 五级证据词表 ────────────────────────────────────────────────────
 EVIDENCE_LEVELS = (
@@ -80,8 +80,9 @@ CONTRACT_KNOWN_KEYS = frozenset({
     "id", "session", "claims", "deliverables", "verificationRefs", "role",
 })
 
-# 首版锁定的导出契约版本；其他版本整体降级 + warning
-LOCKED_CONTRACT_VERSIONS = frozenset({"v2"})
+# 锁定的导出契约版本（v2 = 官方 /export；v4 = 真实内部信封事件持久化，
+# 与 v2 在核心事件上同构）；其他版本整体降级 + warning
+LOCKED_CONTRACT_VERSIONS = frozenset({"v2", "v4"})
 
 SOURCE_KINDS = ("dsh-zip", "dsh-jsonl", "dsh-markdown", "generic-markdown")
 SOURCE_MODES = ("full", "text")

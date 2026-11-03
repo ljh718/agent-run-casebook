@@ -1,5 +1,79 @@
 # agent-run-casebook 变更说明
 
+## v1.2.0（2026-11）
+
+DSH 官方信封事件格式解析修复版本（真实 DSH v4 会话实测发现并修复的 P0 缺口）。
+
+### 修复（P0）
+
+- **信封事件解析缺口**：真实 DSH 会话实测发现，此前的 JSONL 解析只认合成格式
+  `{"type":"user"|"assistant"|"tool"|"check",...}`，官方信封事件
+  `{"type":"user/message","data":{...}}` 全部落入「无已知 type」分支，
+  casebook.py all 对真实会话产出 0 条有效记录（报「输入可识别但未解析到
+  任何有效记录」）。新增 `scripts/dsh_events.py` 信封解析模块并接入
+  normalize，合成格式解析完全不变（向后兼容全部既有 fixtures/测试）：
+  - user/message → user 事件（text 块按序拼接）；file 块 → deliverable
+    事件（path 取 attachment.name）。
+  - assistant/message → assistant 事件 + message.content 中 tool-call 块 →
+    tool_call 事件；data.usage 有数值 token 则记录（cache 类 token 不计，
+    无 cost 不估算）。
+  - tool/call → tool_call；tool/result → tool_result
+    （toolCallId=data.message.toolCallId，isError→fail 否则 ok）。
+  - session/title → 标题（写入 run.task.title）。
+  - job/registered、job/settled、`*/delivery-accepted` → automation 事件，
+    沿用「只标已投递 + 证据封顶 tool-evidence」语义，绝不从 settled 推断
+    执行成功。
+  - system/message → 结构排除（沿用 SYSTEM_RECORD 计数，值不保留）。
+  - step/*、turn/*、request/*、permission/preset、sandbox/mode、
+    approval/policy、web/*、agent/inbox/*、session/title-llm-request 及其他
+    未知类型 → 不猜语义：UNKNOWN_FIELD 警告 + 保留 source_ref，计入有效记录
+    （防 0 条误报），不生成任何 user/assistant/claim 事件。
+  - time（epoch ms）→ 确定性 ISO 8601 UTC（整除实现，固定时区，重复构建
+    逐字节一致）。
+  - 头行 version：2 与 4 为已知契约（v2/v4，锁定集扩展）；其他值出
+    CONTRACT_VERSION_MISMATCH 警告并整体降级 unknown。
+- 同一 callId 的 tool_call 事件（信封格式中 assistant 工具块 + 独立
+  tool/call 事件指向同一次调用）只保留首个并出 TOOL_CALL_DUPLICATE 警告，
+  步骤工具引用同步去重。
+- **无 callId 工具块合并（真实 v4 形态实测修复，QA 复测 P1-1）**：真实会话
+  中 assistant/message 的 tool-call 块 0/22 带 callId，同 callId 去重永不
+  触发——每次调用产出两条 tool_call（块副本 call_id=None），三例真实会话
+  统计精确翻倍（16/8、44/22、68/34），且 call_id_to_id[None] 被副本覆盖
+  导致多步骤错误引用同一幽灵条目（实测 35 次步骤引用中 13 次指向同一幽灵）。
+  修复：①call_id_to_id 不接受 None 键（杜绝幽灵覆盖）；②无 callId 块记为
+  pending，同一文档作用域内与随后首个同名带 callId 的 tool_call 事件确定性
+  合并（块副本移除，tool_call 数 == 带 callId 事件数）；文档结束仍未消解的
+  pending 块按原位置保留（call_id=None）并出 UNMERGED_TOOL_CALL_BLOCK 警告
+  （消除静默）；③带 callId 块行为不变。真实三例复测：tool_call 数精确等于
+  信封 tool/call 数（8/22/34），零幽灵共享，零 UNMERGED / DUPLICATE 警告。
+  新增真实形态 fixture（tests/fixtures/good/dsh-v4-realform/）与 7 例回归。
+- **残留复检域失配（真实会话实测第二处 P0）**：R-INLINE-CRED 在真实会话上
+  应用 8 处、逐叶复检零命中，却在硬门字节扫描上命中 1 处假阳性（exit 5、
+  产物零落盘）。根因：规则的应用域是字符串叶，而复检跑在序列化 / 渲染
+  字节流上——JSON 字面 \n 转义（两个非空白字符）会把叶内「凭据值段过短」
+  的中文正文（「……密码）」换行接编号列表「2. …」）在字节流上凑满
+  \S{4,}；HTML 的 <pre> 单元格结尾后紧跟标记串同理。修复：新增
+  residual_scan_tree（逐字符串叶复检，机制 A/B/C + 负向集 + marker 全套），
+  run.json / HTML / MD 统一按脱敏树扫描（emit_atomic 增 scan_tree 参数，
+  未传时保持旧字节扫描向后兼容）。「应用后不被复检命中」不变式恢复，
+  fail-closed 硬门与脱敏语义不放松；新增 9 例回归（含正反向量、emit_atomic
+  双路径、CLI 端到端 exit 0）。
+
+### 测试与文档
+
+- 新增 fixture `tests/fixtures/good/dsh-v4/input.jsonl`（人工脱敏信封样本，
+  覆盖 v4 头行、session/title、user/message 文本+附件块、assistant/message
+  文本+工具块+usage、tool/call、tool/result ok 与 fail、job registered/settled、
+  delivery-accepted、system/message 排除、未知事件类型、epoch ms 时间），
+  并登记进 --fixtures 回归集。
+- 新增 `tests/test_dsh_envelope.py`（18 例）：解析计数>0（0 条回归）、text
+  拼接、块与 result 配对、epoch ms 确定性、automation 封顶、system 排除计数、
+  未知事件仅警告、version 2/4/99、重复构建逐字节一致（模型级 + CLI 双跑）。
+- SKILL.md 版本升至 1.2.0；references/dsh-export.md 增补真实内部持久化形态
+  （session.v4.jsonl.zstd，多帧 zstd，非 /export 产物）、v4 已知事件类型
+  清单与未知事件处理策略。
+- 生成器版本同步 1.2.0。
+
 ## v1.1.0（2026-11）
 
 安全与判定修复版本（依据外部缺陷报告 P0-1 / P0-2 / P1-1 / P1-2 / P1-3）。

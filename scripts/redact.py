@@ -19,6 +19,11 @@ URL 分级（v1.1.0，替代旧 R-URL 无差别全抹）：
 残留扫描两套机制（v1.1.0，修复「检测集与替换集同源」盲区）：
   A. 规则复检：把生效规则表在最终文本上重跑一遍——各规则/负向集带占位符守卫
      （(?!\[REDACTED)），占位符自身不会被再命中，命中即代表替换未生效。
+     应用域不变式（v1.2.0）：规则只应用于字符串叶，因此复检也必须逐叶进行
+     （residual_scan_tree），不得在任何序列化/渲染字节流上重跑含 \S/\s 的
+     规则——JSON 字面 \n 转义、HTML 标记串都会在字节流上拼出叶内不可能
+     出现的跨界匹配（假阳性硬门）。run.json / HTML / MD 统一按脱敏树逐叶
+     扫描；residual_scan_bytes 仅为向后兼容保留。
   B. 独立宽形态探测 RESIDUAL_SUSPICIOUS：与替换集刻意不同源、更宽，
      只查不改，命中即拒绝产出（fail-closed），让使用者清洗输入。
      默认 --strict-pii 开启；--no-strict-pii 时跳过 B，仅记 PII_SUSPECTED
@@ -319,6 +324,57 @@ def residual_scan_bytes(data, extra_markers=(), strict_pii=True, url_mode="defau
                         denylist=()):
     return residual_scan_text(data.decode("utf-8", errors="replace"),
                               extra_markers, strict_pii, url_mode, denylist)
+
+
+def _string_leaves(obj):
+    """深度优先产出 JSON 树的全部字符串叶（键不产出：键来自固定 schema）。"""
+    if isinstance(obj, dict):
+        for v in obj.values():
+            yield from _string_leaves(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _string_leaves(v)
+    elif isinstance(obj, str):
+        yield obj
+
+
+def residual_scan_tree(obj, extra_markers=(), strict_pii=True, url_mode="default",
+                       denylist=()):
+    """对脱敏后的 JSON 树逐字符串叶做残留扫描（机制 A/B/C + 负向集 + marker）。
+
+    与 residual_scan_bytes 的关键差异（v1.2.0 修复，R-INLINE-CRED 假阳性硬门）：
+    规则的应用域是「字符串叶」，复检必须落在同一域上。JSON 序列化会把叶内的
+    真实换行编码为字面反斜杠+n（两个非空白字符），在序列化字节流上重跑含
+    \\S / \\s 的规则会产生叶内不可能出现的跨界匹配——例如中文正文
+    「……密码）」换行接编号列表「2. …」，叶内值段只有 1 个非空白字符（不命中
+    也不该命中），字节流上却凑满 \\S{4,} 而误触发硬门。逐叶扫描恢复
+    「应用后不被复检命中」不变式；denied 词与 marker 同理（应用均在叶内）。
+    返回命中标识列表（去重、机制顺序与 residual_scan_text 一致）。
+    """
+    leaves = list(_string_leaves(obj))
+    hits = []
+    for rid, rx, _repl in active_rules(url_mode):
+        if any(rx.search(leaf) for leaf in leaves):
+            hits.append(rid)
+    for rid, rx in RESIDUAL_NEGATIVE:
+        if any(rx.search(leaf) for leaf in leaves):
+            hits.append(rid)
+    if denylist:
+        terms = {t for t in denylist if t}
+        for leaf in leaves:
+            clean = "".join(p for i, p in enumerate(_DENY_SPLIT_RE.split(leaf))
+                            if i % 2 == 0)
+            if any(t in clean for t in terms):
+                hits.append(DENYLIST_RULE_ID)
+                break
+    if strict_pii:
+        for rid, rx in RESIDUAL_SUSPICIOUS:
+            if any(rx.search(leaf) for leaf in leaves):
+                hits.append(rid)
+    for marker in extra_markers or ():
+        if marker and any(marker in leaf for leaf in leaves):
+            hits.append("MARKER:{}".format(marker))
+    return hits
 
 
 def suspect_scan_tree(obj):

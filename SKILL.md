@@ -14,7 +14,7 @@ examples_en:
   - "Turn this DSH /export archive into a shareable casebook."
   - "Read this session.v2.jsonl and build an evidence-graded run report."
   - "Summarize this failing-test-to-passing-regression run for review."
-version: 1.1.0
+version: 1.2.0
 author: 刘俊涵
 agent_created: true
 ---
@@ -28,7 +28,7 @@ agent_created: true
 应触发：
 
 - 用户提供 DSH /export ZIP，要求整理成案例页、复盘页或可分享页。
-- 用户给出 session.v2.jsonl 或 session.jsonl，要求生成运行报告。
+- 用户给出 session.v2.jsonl、session.v4.jsonl 或 session.jsonl，要求生成运行报告。
 - 用户粘贴结构化会话 Markdown（用户 / 助手 / 工具标题），要求按证据分级整理成果。
 - 用户要求把一次「失败测试 → 修改 → 回归通过」的任务整理成可核验材料。
 
@@ -77,7 +77,11 @@ agent_created: true
   `--denylist <文件>` 提供词条（命中替换为 [REDACTED:R-DENYLIST]，计入审计报告）。
   长数字形态探测可能对 11 位以上流水号/时间戳误报（默认硬门拦截），属「宁多脱不少漏」的
   有意取舍；确需放行请使用 `--no-strict-pii` 并按 PII_SUSPECTED 警告逐条复核。
-- 当前无真实 DSH 导出样本，验收基于符合官方契约的人工构造样例；真实样本验证待用户提供导出后补充，适配说明与已知限制见 references/dsh-export.md。
+- v1.2.0 起支持 DSH 官方信封事件格式（type 形如 user/message / assistant/message /
+  tool/call / tool/result，头行 type=session 携带 version）：契约版本 v2 与 v4 为已知，
+  其他版本整体降级并出警告；未识别的信封事件类型只记 UNKNOWN_FIELD 警告并保留来源
+  引用，不猜语义、不生成 user/assistant/claim 事件。适配说明、真实内部持久化形态
+  （session.v4.jsonl.zstd，多帧 zstd）与已知限制见 references/dsh-export.md。
 - 脚本资源以技能目录为基准（内部按脚本自身位置解析），与调用时的工作目录无关。
 - CLI 子命令、退出码与运行模型字段见 references/api_reference.md。
 

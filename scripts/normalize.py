@@ -20,8 +20,10 @@ from pathlib import Path
 
 try:
     from . import runmodel as rm
+    from . import dsh_events as dsh
 except ImportError:  # 直接以脚本目录为 sys.path 运行时
     import runmodel as rm
+    import dsh_events as dsh
 
 
 class UnrecognizedInputError(ValueError):
@@ -134,7 +136,16 @@ def _unknown_from_record(record, base_ref, warnings, state=None):
 
 
 def _jsonl_record_events(record, line_no, scope_prefix, warnings, state):
-    """单条 JSONL 记录 → 事件列表。state 为跨记录共享计数器（结构排除统计）。"""
+    """单条 JSONL 记录 → 事件列表。state 为跨记录共享计数器（结构排除统计、
+    信封契约版本提示）。DSH 官方信封格式（v2/v4）由 dsh_events 处理；
+    合成格式（type=user|assistant|tool|check）走原有分支，完全不变。"""
+    # DSH 官方信封：头行（type=session + version）只捕获契约版本提示
+    if dsh.is_envelope_head(record):
+        dsh.capture_head(record, state)
+        return []
+    # DSH 官方信封事件（type 形如 "user/message"，带 data 对象）
+    if dsh.is_envelope_event(record):
+        return dsh.envelope_record_events(record, line_no, scope_prefix, warnings, state)
     ref_base = rm.make_ref(scope_prefix, line_no)
     rtype = str(record.get("type", "")).strip().lower()
     role = str(record.get("role", "")).strip().lower()
@@ -471,8 +482,12 @@ def assemble_run_model(kind, events, inputs, warnings, degradations, skipped_mem
 
     # 任务与时间
     goal = None
+    session_title = None
     started_at, ended_at = None, None
     for ev in events:
+        if ev["etype"] == "title" and session_title is None and ev.get("text"):
+            # 信封 session/title 事件：只取标题文本，不参与证据与叙事判定
+            session_title = ev["text"]
         if ev["etype"] == "user" and not goal:
             goal = ev["text"].strip()[:200] or None
         ts = ev.get("ts")
@@ -482,14 +497,27 @@ def assemble_run_model(kind, events, inputs, warnings, degradations, skipped_mem
             if ended_at is None or ts > ended_at:
                 ended_at = ts
 
-    # 工具调用（配对后状态）
+    # 工具调用（配对后状态）。同一 callId 的 tool_call 事件只保留首个：
+    # 信封格式中 assistant/message 的 tool-call 块与独立 tool/call 事件指向
+    # 同一次调用，重复计入会虚增统计（call_id 为 None 的事件不去重，
+    # 且 None 键不入 call_id_to_id——否则多个无 callId 副本会在映射中
+    # 互相覆盖，让多个步骤错误引用同一幽灵条目）。
     tool_calls, call_id_to_id = [], {}
     tc_n = 0
+    seen_call_ids = set()
     for ev in events:
         if ev["etype"] == "tool_call":
+            call_id = ev.get("call_id")
+            if call_id is not None:
+                if call_id in seen_call_ids:
+                    warnings.append({"code": "TOOL_CALL_DUPLICATE", "source_ref": ev["ref"],
+                                     "detail": "同一 callId 的工具调用重复出现，仅保留首个: {}".format(call_id)})
+                    continue
+                seen_call_ids.add(call_id)
             tc_n += 1
             tid = "tc-{}".format(tc_n)
-            call_id_to_id[ev.get("call_id")] = tid
+            if call_id is not None:
+                call_id_to_id[call_id] = tid
             tool_calls.append({
                 "id": tid, "name": ev.get("name", ""), "call_id": ev.get("call_id"),
                 "status": ev.get("status"), "ts": ev["ts"].isoformat() if ev.get("ts") else None,
@@ -504,8 +532,14 @@ def assemble_run_model(kind, events, inputs, warnings, degradations, skipped_mem
             continue
         step_n += 1
         window = _window_events(events, i)
-        window_call_ids = [call_id_to_id[w.get("call_id")] for w in window
-                           if w["etype"] == "tool_call" and w.get("call_id") in call_id_to_id]
+        # 同一 callId 的重复 tool_call 事件（如信封格式的 tool-call 块 +
+        # 独立 tool/call 事件）只引用一次，保持确定性顺序
+        window_call_ids = []
+        for w in window:
+            if w["etype"] == "tool_call" and w.get("call_id") in call_id_to_id:
+                tid = call_id_to_id[w["call_id"]]
+                if tid not in window_call_ids:
+                    window_call_ids.append(tid)
         title = ev["text"].strip().splitlines()[0][:60] if ev["text"].strip() else "助手回复"
         steps.append({"id": "step-{}".format(step_n), "title": title or "助手回复",
                       "text": ev["text"], "source_ref": ev["ref"],
@@ -643,6 +677,7 @@ def assemble_run_model(kind, events, inputs, warnings, degradations, skipped_mem
             "exclusions": exclusions_list,
         },
         "task": {"goal": goal,
+                 "title": session_title,
                  "started_at": started_at.isoformat() if started_at else None,
                  "ended_at": ended_at.isoformat() if ended_at else None},
         "steps": steps,
@@ -682,4 +717,9 @@ def parse_input(path, ordinal=1):
     if not events:
         raise UnrecognizedInputError(
             "输入可识别但未解析到任何有效记录（0 条）: {}".format(path))
+    if kind in ("dsh-zip", "dsh-jsonl"):
+        # 无 callId 的信封 tool-call 块与同名 tool/call 事件合并（真实 v4
+        # 形态），须在配对与组装前完成；合成 / Markdown 事件无内部标记，
+        # 调用为确定性空操作
+        dsh.merge_pending_tool_blocks(events, warnings)
     return assemble_run_model(kind, events, inputs, warnings, degradations, skipped, state)

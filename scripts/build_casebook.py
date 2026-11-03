@@ -504,17 +504,32 @@ def render_markdown(run):
     return "\n".join(lines) + "\n"
 
 
-def emit_atomic(outdir, files, strict_pii=True, url_mode="default", denylist=()):
+def emit_atomic(outdir, files, strict_pii=True, url_mode="default", denylist=(),
+                scan_tree=None):
     """内存组装 → 残留扫描（两套机制 + denylist 复检）→ 临时文件 → 原子改名。
-    任一命中则整体失败、不落盘。"""
+    任一命中则整体失败、不落盘。
+
+    扫描域（v1.2.0 修复 R-INLINE-CRED 假阳性硬门）：传入 scan_tree（脱敏后的
+    run 树）时，全部产物统一按「字符串叶」扫描——规则的应用域是叶，复检必须
+    同域。HTML/MD/run.json 的序列化字节流均非应用域：<pre> 单元格结尾的
+    「密码）」后紧跟 HTML 标记串、或 JSON 字面 \\n 转义，都会在字节流上拼出
+    叶内不可能出现的 \\S{4,} 跨界匹配。不传 scan_tree 时保持旧的逐产物
+    字节扫描（向后兼容直接调用）。"""
     outdir = Path(outdir)
     payloads = {}
+    tree_hits = None
+    if scan_tree is not None:
+        tree_hits = rd.residual_scan_tree(scan_tree, strict_pii=strict_pii,
+                                          url_mode=url_mode, denylist=denylist)
+        if tree_hits:
+            raise rd.ResidualLeakError(tree_hits)
     for name, content in files.items():
         data = content if isinstance(content, bytes) else content.encode("utf-8")
-        hits = rd.residual_scan_bytes(data, strict_pii=strict_pii, url_mode=url_mode,
-                                      denylist=denylist)
-        if hits:
-            raise rd.ResidualLeakError(hits)
+        if tree_hits is None:
+            hits = rd.residual_scan_bytes(data, strict_pii=strict_pii,
+                                          url_mode=url_mode, denylist=denylist)
+            if hits:
+                raise rd.ResidualLeakError(hits)
         payloads[name] = data
     outdir.mkdir(parents=True, exist_ok=True)
     for name, data in payloads.items():

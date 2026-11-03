@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """test_redact.py — 各类敏感串、中文路径、规则顺序、幂等、残留扫描。"""
 
+import json
 import unittest
 
 import redact as rd
+import build_casebook as bc
 
 
 class TestPatternRules(unittest.TestCase):
@@ -348,6 +350,119 @@ class TestResidualScan(unittest.TestCase):
 
     def test_scan_bytes(self):
         self.assertIn("R-RES-URLCRED", rd.residual_scan_bytes("xhttps://u:p@a.b".encode("utf-8")))
+
+
+class TestResidualScanTreeDomain(unittest.TestCase):
+    """v1.2.0：复检域不变式——规则的应用域是字符串叶，复检必须同域。
+
+    回归背景（真实 DSH 会话实测，样本脱敏重构）：正文「……密码）」后接
+    换行 + 编号列表「2. …」，叶内凭据值段只有 1 个非空白字符（规则不命中、
+    也不该命中）；但 JSON 序列化把换行编码为字面反斜杠+n、HTML 渲染在
+    <pre> 结尾后直接拼接标记串，两种字节流上都能凑满 \\S{4,} 而误触发
+    R-INLINE-CRED 硬门（exit 5、产物零落盘）。修复：run.json / HTML / MD
+    统一按脱敏树逐叶扫描（residual_scan_tree）。"""
+
+    # 脱敏合成样本：中文正文形态（无任何真实凭据），两个跨界变体同形
+    PROSE_LEAF = "请通过跳板机连上环境（需要你输一次 root 密码）\n2. 重新验证能否正常连接。"
+    END_LEAF = "请通过跳板机连上环境（需要你输一次 root 密码）"
+    # 叶内真凭据形态：密码 + 4 个以上非空白字符（应被应用且复检零命中）
+    CRED_LEAF = "数据库密码是 abcd1234efgh，请勿外传。"
+
+    def _redact_tree(self, text):
+        run = {"task": {"goal": text}, "warnings": []}
+        redacted, counts = rd.redact_tree(run)
+        return redacted, counts
+
+    def test_prose_boundary_not_applied_and_tree_scan_clean(self):
+        """跨界正文：规则不应用（值段过短），逐叶复检零命中。"""
+        redacted, counts = self._redact_tree(self.PROSE_LEAF)
+        self.assertNotIn("R-INLINE-CRED", counts)
+        self.assertEqual(rd.residual_scan_tree(redacted), [])
+        self.assertEqual(rd.suspect_scan_tree(redacted), [])
+        blob = json.dumps(redacted, ensure_ascii=False)
+        self.assertIn("root 密码", blob, "正文非凭据内容必须原样保留")
+
+    def test_json_bytes_divergence_documented(self):
+        """文档化根因：同一树的 JSON 字节流会命中（字面 \\n 转义拼出跨界值段），
+        因此复检禁止在序列化字节流上进行。"""
+        redacted, _ = self._redact_tree(self.PROSE_LEAF)
+        payload = json.dumps(redacted, ensure_ascii=False).encode("utf-8")
+        self.assertIn("R-INLINE-CRED", rd.residual_scan_bytes(payload))
+
+    def test_html_markup_boundary_not_hit(self):
+        """HTML 变体：<pre> 单元格结尾「密码）」后紧跟标记串，叶内值段过短；
+        树扫描零命中（渲染字节流属非应用域，不得作为复检依据）。"""
+        redacted, _ = self._redact_tree(self.END_LEAF)
+        # 模拟渲染拼接：叶文本后紧跟非空白标记串（形态同 </pre></td><td><span）
+        rendered_like = self.END_LEAF + "</pre></td><td><span"
+        rx = dict((r[0], r[1]) for r in rd.REDACTION_RULES)["R-INLINE-CRED"]
+        self.assertTrue(rx.search(rendered_like), "字节流形态应能复现误报")
+        self.assertEqual(rd.residual_scan_tree(redacted), [])
+
+    def test_real_cred_still_applied_and_clean(self):
+        """不变式正向：真凭据叶应用后逐叶复检零命中（守卫覆盖占位符）。"""
+        redacted, counts = self._redact_tree(self.CRED_LEAF)
+        self.assertEqual(counts.get("R-INLINE-CRED"), 1)
+        self.assertNotIn("abcd1234efgh", json.dumps(redacted, ensure_ascii=False))
+        self.assertEqual(rd.residual_scan_tree(redacted), [])
+        self.assertEqual(rd.suspect_scan_tree(redacted), [])
+
+    def test_unredacted_cred_tree_caught(self):
+        """负向：未经应用的树（绕过脱敏）必须被逐叶复检拦截——修复不得放松语义。"""
+        tree = {"task": {"goal": self.CRED_LEAF}}
+        self.assertIn("R-INLINE-CRED", rd.residual_scan_tree(tree))
+        self.assertIn("R-SUS-CREDWORD", rd.residual_scan_tree(tree))
+
+    def test_tree_scan_denylist_and_markers(self):
+        tree = {"task": {"goal": "涉及张伟的项目"}, "warnings": []}
+        self.assertIn("R-DENYLIST", rd.residual_scan_tree(tree, denylist=["张伟"]))
+        cleaned, _ = rd.redact_tree({"task": {"goal": "涉及张伟的项目"}},
+                                    denylist=["张伟"])
+        self.assertEqual(rd.residual_scan_tree(cleaned, denylist=["张伟"]), [])
+        self.assertIn("MARKER:M1", rd.residual_scan_tree(
+            {"task": {"goal": "含标记 M1"}}, extra_markers=("M1",)))
+
+    def test_emit_atomic_tree_scan_beats_rendered_bytes(self):
+        """emit_atomic 传入 scan_tree 时按叶扫描：跨界正文产物应成功落盘。"""
+        import tempfile
+        from pathlib import Path
+        redacted, _ = self._redact_tree(self.PROSE_LEAF)
+        html_text = "<p>" + self.END_LEAF + "</pre></td><td><span"
+        with tempfile.TemporaryDirectory() as td:
+            paths = bc.emit_atomic(td, {"casebook.html": html_text,
+                                        "run.json": json.dumps(redacted).encode("utf-8")},
+                                   scan_tree=redacted)
+            self.assertTrue(all(Path(p).is_file() for p in paths))
+
+    def test_emit_atomic_byte_scan_still_blocks_leak(self):
+        """向后兼容：不传 scan_tree 时保持逐产物字节扫描（直接调用方语义不变）。"""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(rd.ResidualLeakError):
+                bc.emit_atomic(td, {"casebook.html": "数据库密码是 abcd1234efgh"})
+
+    def test_cli_end_to_end_boundary_prose_exit_0(self):
+        """CLI 端到端：含跨界正文形态的合成 JSONL 走 all 全流程 → exit 0 四件产物齐。"""
+        import json as _json
+        import tempfile
+        import casebook as cb_cli
+        from pathlib import Path
+        lines = [
+            _json.dumps({"type": "user", "text": "排查连接问题", "ts": "2026-03-01T10:00:00"},
+                        ensure_ascii=False),
+            _json.dumps({"type": "assistant",
+                         "text": self.PROSE_LEAF,
+                         "ts": "2026-03-01T10:01:00"}, ensure_ascii=False),
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "in.jsonl"
+            inp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            outdir = Path(td) / "out"
+            code = cb_cli.main(["all", str(inp), "--out", str(outdir)])
+            self.assertEqual(code, 0)
+            for name in ("casebook.html", "casebook.md", "run.json",
+                         "redaction-report.txt"):
+                self.assertTrue((outdir / name).is_file(), name)
 
 
 if __name__ == "__main__":

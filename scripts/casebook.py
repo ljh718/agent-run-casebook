@@ -243,8 +243,10 @@ def cmd_redact(args):
         print("残留扫描（独立宽形态探测）不通过（硬门），run.json 不落盘。命中: {}".format(detail))
         return EXIT_REDACT
     payload = (_dump(redacted) + "\n").encode("utf-8")
-    hits = rd.residual_scan_bytes(payload, strict_pii=args.strict_pii,
-                                  url_mode=_url_mode(args), denylist=denylist)
+    # 机制 A 复检与规则应用同域（逐字符串叶）——JSON 字节流上的字面 \n 转义
+    # 会拼出叶内不可能出现的跨界匹配（R-INLINE-CRED 假阳性硬门，v1.2.0 修复）
+    hits = rd.residual_scan_tree(redacted, strict_pii=args.strict_pii,
+                                 url_mode=_url_mode(args), denylist=denylist)
     if hits:
         print("残留扫描不通过（硬门），run.json 不落盘。命中: {}".format(", ".join(hits)))
         return EXIT_REDACT
@@ -275,7 +277,8 @@ def cmd_build(args):
             "casebook.html": html_text,
             "casebook.md": md_text,
             "run.json": run_path.read_bytes(),
-        }, strict_pii=args.strict_pii, url_mode=_url_mode(args))
+        }, strict_pii=args.strict_pii, url_mode=_url_mode(args),
+            scan_tree=run)
     except rd.ResidualLeakError as exc:
         print("残留扫描不通过（硬门），产物不落盘。{}".format(exc))
         return EXIT_REDACT
@@ -345,12 +348,19 @@ def cmd_all(args):
         print("构建错误: {}".format(exc))
         return EXIT_BUILD
     run_json_bytes = (_dump(redacted) + "\n").encode("utf-8")
+    # 机制 A 复检与规则应用同域（逐字符串叶），见 cmd_redact 内注释
+    hits = rd.residual_scan_tree(redacted, strict_pii=args.strict_pii,
+                                 url_mode=_url_mode(args), denylist=denylist)
+    if hits:
+        print("残留扫描不通过（硬门），产物不落盘。命中: {}".format(", ".join(hits)))
+        return EXIT_REDACT
     try:
         paths = bc.emit_atomic(outdir, {
             "casebook.html": html_text,
             "casebook.md": md_text,
             "run.json": run_json_bytes,
-        }, strict_pii=args.strict_pii, url_mode=_url_mode(args), denylist=denylist)
+        }, strict_pii=args.strict_pii, url_mode=_url_mode(args), denylist=denylist,
+            scan_tree=redacted)
     except rd.ResidualLeakError as exc:
         print("残留扫描不通过（硬门），产物不落盘。{}".format(exc))
         return EXIT_REDACT

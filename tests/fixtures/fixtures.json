@@ -4,6 +4,8 @@
     {"name": "good-bugfix", "input": "tests/fixtures/good/bugfix/input.jsonl", "expect_exit": 0},
     {"name": "good-research", "input": "tests/fixtures/good/research/input.md", "expect_exit": 0},
     {"name": "good-data-zip", "input": "tests/fixtures/good/data/export.zip", "expect_exit": 0},
+    {"name": "good-dsh-v4", "input": "tests/fixtures/good/dsh-v4/input.jsonl", "expect_exit": 0},
+    {"name": "good-dsh-v4-realform", "input": "tests/fixtures/good/dsh-v4-realform/input.jsonl", "expect_exit": 0},
     {"name": "bad-malformed-jsonl", "input": "tests/fixtures/bad/malformed.jsonl", "expect_exit": 3},
     {"name": "bad-unknown-format", "input": "tests/fixtures/bad/unknown-format.txt", "expect_exit": 3},
     {"name": "bad-narrative-violation", "input": "tests/fixtures/bad/narrative-violation/input.jsonl", "narrative": "tests/fixtures/bad/narrative-violation/narrative.json", "expect_exit": 4},

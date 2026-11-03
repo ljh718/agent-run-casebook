@@ -1,0 +1,18 @@
+{"type":"session","version":4,"id":"session-demo0001","createdAt":1772359200000,"cwd":"C:/Users/demo/project","isSeeded":false,"delegationDepth":0,"agentPreset":"standard","title":null}
+{"type":"session/title","seq":2,"time":1772359200000,"data":{"title":"解析回归修复案例（演示）"}}
+{"type":"user/message","seq":3,"time":1772359260000,"data":{"content":[{"type":"text","text":"修复 parser.py 的日期解析回归。"},{"type":"text","text":"配置见附件。"},{"type":"file","attachment":{"name":"config-demo.ini"}}],"id":"u-demo-1","role":"user","source":{"kind":"user"}}}
+{"type":"assistant/message","seq":4,"time":1772359320000,"data":{"message":{"role":"assistant","source":{"kind":"model","provider":"demo-provider","model":"demo-model"},"content":[{"type":"text","text":"先复现问题。"},{"type":"tool-call","callId":"call-1","name":"run","arguments":{"cmd":"pytest tests/test_parser.py"}}],"step":1,"stream":false,"turn":1},"usage":{"inputTokens":120,"outputTokens":45,"cacheReadTokens":10},"step":1,"stream":false,"turn":1}}
+{"type":"tool/call","seq":5,"time":1772359325000,"data":{"arguments":{"cmd":"pytest tests/test_parser.py"},"callId":"call-1","name":"run","step":1,"turn":1},"sourceEventSeqs":[4]}
+{"type":"tool/result","seq":6,"time":1772359326543,"data":{"message":{"toolCallId":"call-1","content":[{"type":"text","text":"1 passed"}]},"meta":{},"step":1,"turn":1},"sourceEventSeqs":[5]}
+{"type":"assistant/message","seq":7,"time":1772359380000,"data":{"message":{"role":"assistant","source":{"kind":"model","provider":"demo-provider","model":"demo-model"},"content":[{"type":"text","text":"已在本地修复 parser.py，回归通过。"},{"type":"tool-call","callId":"call-2","name":"edit","arguments":{"file":"parser.py"}}],"step":2,"stream":false,"turn":1},"usage":{"inputTokens":100,"outputTokens":30},"step":2,"stream":false,"turn":1}}
+{"type":"tool/call","seq":8,"time":1772359385000,"data":{"arguments":{"file":"parser.py"},"callId":"call-2","name":"edit","step":2,"turn":1},"sourceEventSeqs":[7]}
+{"type":"tool/result","seq":9,"time":1772359386000,"data":{"message":{"toolCallId":"call-2","content":[{"type":"text","text":"assertion failed"}],"isError":true},"meta":{},"step":2,"turn":1},"sourceEventSeqs":[8]}
+{"type":"job/registered","seq":10,"time":1772359500123,"data":{"id":"job-demo-1","name":"演示定时任务","schedule":"daily 09:00"}}
+{"type":"job/settled","seq":11,"time":1772359510000,"data":{"id":"job-demo-1","status":"completed"}}
+{"type":"session-log-deepseek/delivery-accepted","seq":12,"time":1772359520000,"data":{"id":"log-demo-1","bytes":2048}}
+{"type":"system/message","seq":13,"time":1772359530000,"data":{"text":"SYSTEM-DEMO-CONTENT-XYZ 应被整体排除，不进入运行模型"}}
+{"type":"telemetry/heartbeat","seq":14,"time":1772359540000,"data":{"beat":7}}
+{"type":"assistant/message","seq":15,"time":1772359620000,"data":{"message":{"role":"assistant","source":{"kind":"model","provider":"demo-provider","model":"demo-model"},"content":[{"type":"text","text":"补上时区分支，回归全部通过。"},{"type":"tool-call","callId":"call-3","name":"edit","arguments":{"file":"parser.py"}}],"step":3,"stream":false,"turn":1},"usage":{},"step":3,"stream":false,"turn":1}}
+{"type":"tool/call","seq":16,"time":1772359625000,"data":{"arguments":{"file":"parser.py"},"callId":"call-3","name":"edit","step":3,"turn":1},"sourceEventSeqs":[15]}
+{"type":"tool/result","seq":17,"time":1772359626000,"data":{"message":{"toolCallId":"call-3","content":[{"type":"text","text":"3 passed"}]},"meta":{},"step":3,"turn":1},"sourceEventSeqs":[16]}
+{"type":"assistant/message","seq":18,"time":1772359680000,"data":{"message":{"role":"assistant","source":{"kind":"model","provider":"demo-provider","model":"demo-model"},"content":[{"type":"text","text":"回归全部通过，任务已完成。"}],"step":4,"stream":false,"turn":1},"step":4,"stream":false,"turn":1}}
