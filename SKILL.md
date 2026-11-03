@@ -14,7 +14,7 @@ examples_en:
   - "Turn this DSH /export archive into a shareable casebook."
   - "Read this session.v2.jsonl and build an evidence-graded run report."
   - "Summarize this failing-test-to-passing-regression run for review."
-version: 1.0.1
+version: 1.0.2
 author: 刘俊涵
 agent_created: true
 ---
