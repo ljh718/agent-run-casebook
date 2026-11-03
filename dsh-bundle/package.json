@@ -1,0 +1,25 @@
+{
+  "name": "agent-run-casebook",
+  "version": "1.2.1",
+  "description": "Agent Run Casebook DSH bundle: installs the agent-run-casebook skill (turn DSH run exports into verifiable, shareable offline casebooks) into the DSH skills directory.",
+  "type": "module",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "prepare": "node prepare.mjs"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "prepare.mjs",
+    "skill/"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ljh718/agent-run-casebook.git",
+    "directory": "dsh-bundle"
+  }
+}

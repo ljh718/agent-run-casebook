@@ -1,0 +1,41 @@
+{
+  "format": 1,
+  "title": { "en": "ljh718 DSH Plugins", "zh": "ljh718 的 DSH 插件" },
+  "description": { "en": "Self-published DSH bundles by ljh718.", "zh": "ljh718 自发布的 DSH bundle 集合。" },
+  "metadata": {
+    "categories": {
+      "productivity": { "title": { "en": "Productivity", "zh": "效率工具" } }
+    },
+    "labels": {},
+    "sortKeys": {}
+  },
+  "plugins": [
+    {
+      "name": "agent-run-casebook",
+      "title": { "en": "Agent Run Casebook", "zh": "Agent 运行报告生成器" },
+      "description": {
+        "en": "Turn DSH /export ZIPs or session JSONL into verifiable, shareable offline casebook pages: five-level evidence grading, full-tree redaction, and traceable source anchors.",
+        "zh": "把 DSH /export 导出或会话 JSONL 变成可核验、可分享的离线案例页：五级证据分级、全树脱敏、来源锚点回溯。"
+      },
+      "author": "刘俊涵",
+      "homepage": "https://github.com/ljh718/agent-run-casebook",
+      "repository": { "url": "https://github.com/ljh718/agent-run-casebook", "directory": "dsh-bundle" },
+      "metadata": {
+        "category": "productivity",
+        "keywords": ["dsh", "skill", "casebook", "evidence", "report", "redaction", "运行报告", "案例页", "证据"]
+      },
+      "versions": [
+        {
+          "version": "1.2.1",
+          "publishTimestamp": 1793696804,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/ljh718/agent-run-casebook",
+            "commit": "0000000000000000000000000000000000000000",
+            "path": "dsh-bundle"
+          }
+        }
+      ]
+    }
+  ]
+}

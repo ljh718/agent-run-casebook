@@ -3,7 +3,7 @@ name: agent-run-casebook
 description: 把用户明确提供的一次 Agent 运行导出（DSH /export ZIP、session JSONL 或结构化会话 Markdown）解析、脱敏并渲染成可核验的离线单文件案例页：任务目标、关键路径、交付物、五级证据面板与来源锚点一一对应。当用户要求把 /export 或会话记录整理成案例页、复盘页或可分享页，或按证据分级整理一次运行成果时使用；不做逐帧回放、跨 Agent 对比、日报聚合，也不自动扫描个人目录或发布到任何平台。Turn an explicitly provided Agent run export (DSH /export ZIP, session JSONL, or structured Markdown) into a verifiable offline single-file casebook with five-level evidence grading and traceable source anchors. Use when the user asks to turn an export or session log into a shareable review page; not for full replay, cross-agent diffing, daily digests, auto-publishing, or scanning personal directories.
 description_zh: 把一次 Agent 运行导出变成可核验、可分享的离线案例页：五级证据分级、全树脱敏、来源锚点可回溯，缺失指标不估算。
 description_en: Turn one Agent run export into a verifiable, shareable offline casebook with five-level evidence grading, full-tree redaction, and traceable source anchors.
-display_name: Agent 运行案例册
+display_name: Agent 运行报告生成器
 display_name_en: Agent Run Casebook
 category: productivity
 examples_zh:
@@ -14,7 +14,7 @@ examples_en:
   - "Turn this DSH /export archive into a shareable casebook."
   - "Read this session.v2.jsonl and build an evidence-graded run report."
   - "Summarize this failing-test-to-passing-regression run for review."
-version: 1.2.0
+version: 1.2.1
 author: 刘俊涵
 agent_created: true
 ---

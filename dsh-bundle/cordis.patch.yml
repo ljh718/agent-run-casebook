@@ -1,0 +1,4 @@
+# agent-run-casebook bundle layer.
+# The skill payload is installed to <dshHome>/skills/agent-run-casebook by the
+# prepare script; no Host plugin rows are required.
+[]

@@ -14,7 +14,7 @@ import hashlib
 
 SCHEMA_VERSION = "1.0.0"
 GENERATOR_NAME = "agent-run-casebook"
-GENERATOR_VERSION = "1.2.0"
+GENERATOR_VERSION = "1.2.1"
 
 # ── 五级证据词表 ────────────────────────────────────────────────────
 EVIDENCE_LEVELS = (
