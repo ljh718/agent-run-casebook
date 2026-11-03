@@ -139,6 +139,62 @@ class TestRepeatBuildByteIdentical(unittest.TestCase):
         self.assertEqual(bc.render_html(run1), bc.render_html(run2))
 
 
+class TestBanners(unittest.TestCase):
+    """P2-2 / P2-4：页面顶部显著横幅。"""
+
+    def test_text_mode_banner_at_top(self):
+        run_model = _pipeline_run(fixture("good", "research", "input.md"))
+        html = bc.render_html(run_model)
+        self.assertIn("文本模式提示", html)
+        self.assertLess(html.index("文本模式提示"), html.index('id="evidence"'),
+                        "横幅必须在页面顶部区域，而非页面中部")
+
+    def test_full_mode_no_text_banner(self):
+        html = bc.render_html(_pipeline_run(fixture("good", "bugfix", "input.jsonl")))
+        self.assertNotIn("文本模式提示", html)
+
+    def test_contract_mismatch_banner(self):
+        run = make_run()
+        run["warnings"] = [{"code": "CONTRACT_VERSION_MISMATCH", "source_ref": "s1",
+                            "detail": "契约版本 v9 不在锁定集内"}]
+        html = bc.render_html(run)
+        self.assertIn("契约版本提示", html)
+
+    def test_text_mode_contract_unknown_no_duplicate_banner(self):
+        run_model = _pipeline_run(fixture("good", "research", "input.md"))
+        html = bc.render_html(run_model)
+        self.assertIn("文本模式提示", html)
+        self.assertNotIn("契约版本提示", html)
+
+    def test_evidence_panel_scope_note(self):
+        """P2-1：证据面板明示主张抽取覆盖范围。"""
+        html = bc.render_html(_pipeline_run(fixture("good", "bugfix", "input.jsonl")))
+        self.assertIn("主张抽取说明", html)
+        self.assertIn("Agent 自报", html)
+
+
+class TestDurationFormat(unittest.TestCase):
+    """P2-5：耗时人性化显示；原始毫秒保留在 run.json 与 title。"""
+
+    def test_format_vectors(self):
+        self.assertEqual(bc._fmt_duration(360000), "6 分 00 秒")
+        self.assertEqual(bc._fmt_duration(1500), "1 秒")
+        self.assertEqual(bc._fmt_duration(80), "80 ms")
+        self.assertEqual(bc._fmt_duration(3900000), "1 小时 05 分 00 秒")
+
+    def test_html_badge_keeps_raw_ms_in_title(self):
+        run_model = _pipeline_run(fixture("good", "bugfix", "input.jsonl"))
+        html = bc.render_html(run_model)
+        self.assertIn("总耗时：6 分 00 秒", html)
+        self.assertIn('title="360000 ms"', html)
+        self.assertEqual(run_model["metrics"]["duration_ms"], 360000,
+                         "run.json 原始毫秒不得被覆盖")
+
+    def test_tool_call_duration_keeps_raw(self):
+        html = bc.render_html(_pipeline_run(fixture("good", "bugfix", "input.jsonl")))
+        self.assertIn("耗时：1 秒（1500 ms）", html)
+
+
 class TestEmitAtomic(unittest.TestCase):
     def test_writes_all_files(self):
         with tempfile.TemporaryDirectory() as td:
@@ -152,9 +208,26 @@ class TestEmitAtomic(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             with self.assertRaises(rd.ResidualLeakError):
                 bc.emit_atomic(Path(td), {"casebook.html": "<html>ok</html>",
-                                          "casebook.md": "xhttps://keys.host/leak",
+                                          "casebook.md": "订单 202611030000123",
                                           "run.json": "{}"})
             self.assertEqual(list(Path(td).iterdir()), [], "残留扫描失败不得落盘任何文件")
+
+    def test_leak_no_strict_pii_allows_suspect_form(self):
+        """--no-strict-pii：宽形态探测放行（记警告由上层处理），规则级残留仍拦截。"""
+        with tempfile.TemporaryDirectory() as td:
+            paths = bc.emit_atomic(Path(td), {"casebook.md": "订单 202611030000123"},
+                                   strict_pii=False)
+            self.assertTrue(paths)
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(rd.ResidualLeakError):
+                bc.emit_atomic(Path(td), {"casebook.md": "xhttps://u:p@keys.host/leak"},
+                               strict_pii=False)
+
+    def test_external_url_allowed_in_default_mode(self):
+        """P1-3：默认档普通外链不再是残留硬门命中。"""
+        with tempfile.TemporaryDirectory() as td:
+            paths = bc.emit_atomic(Path(td), {"casebook.md": "参考 https://arxiv.org/abs/2309.15217"})
+            self.assertTrue(paths)
 
     def test_no_partial_tmp_left_on_success(self):
         with tempfile.TemporaryDirectory() as td:

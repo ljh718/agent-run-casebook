@@ -38,6 +38,19 @@ decide_evidence 纯函数），语言模型没有授予或升级等级的通道�
 「仅工具动作、未复验」的主张可判为 tool-evidence；工具调用本身不构成
 验证记录，不会触发规则 1 / 规则 2。
 
+## 主张抽取覆盖（P2-1 方案 A）
+
+assistant 的每一句自然语言陈述都进入证据面板，claim_origin 字段区分两类：
+
+- **marker**：命中完成 / 成功标记词（完成、成功、通过、已修复等）的句子，
+  进入完整五级判定，按检查记录归属规则获得验证记录与工具记录。
+- **statement**：未命中标记词的普通陈述，固定为 self-report（Agent 自报）、
+  verification 恒为 unverified、verification_refs 为空——不因后续工具或
+  检查记录升级，也不因此降级。
+
+页面证据面板明示该覆盖范围；句读规则为确定性切分（中文句号 / 问号 / 感叹号
+后切分、换行切分；英文句点不切分以避免切碎小数与缩写）。
+
 ## Automation / Schedule 特例
 
 kind 为 automation 或 schedule 的记录，标签固定为「已投递」，证据等级封顶

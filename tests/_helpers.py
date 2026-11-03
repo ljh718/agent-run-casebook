@@ -37,7 +37,7 @@ def make_run():
                           "source_ref": "s1/L9/j/type",
                           "evidence": {"level": "tool-evidence", "verification": "unverified"}}],
         "claims": [{"id": "c-1", "text": "已修复 parser.py，回归通过。",
-                    "source_ref": "s1/L4/j/type",
+                    "source_ref": "s1/L4/j/type", "claim_origin": "marker",
                     "evidence_level": "external-verification", "verification": "verified",
                     "verification_refs": ["tc-1"]}],
         "automation": [{"id": "a-1", "kind": "automation", "label": "已投递",

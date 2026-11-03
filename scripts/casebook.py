@@ -6,10 +6,22 @@
     validate  <dir>                        schema / 引用 / narrative 白名单校验 → validate.report.json
     redact    <dir> [--narrative <file>]   全树脱敏 run.raw.json（+ 可选 narrative）→ run.json
     build     <dir> [--out <dir>]          渲染 casebook.html / casebook.md（+ run.json 原子副本）
-    all       <input> --out <dir> [--narrative <file>]
-                                           normalize→validate→redact→build 全内存串联，只落三件产物
+    all       <input> --out <dir> [--narrative <file>] [--denylist <file>]
+                                           normalize→validate→redact→build 全内存串联，只落四件产物
     --selftest                             内置自检：脱敏 / 转义 / 证据判定 / 幂等向量
     --fixtures                             按 tests/fixtures/fixtures.json 跑回归集（缺失时清晰报错）
+
+脱敏档位（redact / build / all 共用）：
+    --strict-pii / --no-strict-pii         独立宽形态探测（RESIDUAL_SUSPICIOUS）硬门开关，默认开；
+                                           关闭时命中仅记 PII_SUSPECTED 警告放行
+    --no-urls                              旧行为：所有 http(s) URL 全抹
+    --keep-urls                            host+path 与 query 原样保留（内网域名也放行），
+                                           仅 URL 凭据兜底；query 含高风险键
+                                           （access_token / token / secret 等）时仍被
+                                           strict 硬门拦截，需清洗或 --no-strict-pii
+    --denylist <file>                      自定义词条脱敏（all / redact；UTF-8 每行一词条，
+                                           # 注释；普通字符串替换，长度降序）
+    （默认：保留 host+path 作为出处，抹 query 与内网域名）
 
 退出码：0 成功 | 2 用法错误 | 3 输入不可识别 | 4 校验失败 | 5 脱敏残留硬门 | 6 构建错误。
 
@@ -72,9 +84,89 @@ def _load_narrative(path):
         return False
 
 
-def _redaction_stats(counts):
+REPORT_NAME = "redaction-report.txt"
+PRODUCTS = ("casebook.html", "casebook.md", "run.json", REPORT_NAME)
+
+
+def _audit_entries(audit):
+    """为审计明细分配确定性 detail_id（run.json 与报告共用同一编号）。"""
+    return [dict(e, detail_id="d{}".format(i + 1)) for i, e in enumerate(audit or [])]
+
+
+def _redaction_stats(counts, strict_pii=True, url_mode="default", entries=(),
+                     denylist=()):
+    """P2-6：redaction 统计块。applied 按实际替换次数；details 不含原文片段
+    （snippet 只进 redaction-report.txt，run.json 保持可分享）。"""
+    details = [{k: ent[k] for k in ("detail_id", "source_ref", "rule_id",
+                                    "replacement", "offset", "length")}
+               for ent in list(entries)[:rd.DETAIL_RUNJSON_LIMIT]]
     return {"applied": [{"rule": k, "count": v} for k, v in sorted(counts.items())],
-            "residual_scan": "passed"}
+            "residual_scan": "passed",
+            "strict_pii": bool(strict_pii),
+            "url_mode": url_mode,
+            "denylist_terms": len({t for t in denylist if t}),
+            "details_total": len(list(entries)),
+            "details": details}
+
+
+def _write_redaction_report(outdir, entries):
+    """P2-3 / P2-6：脱敏审计报告（含原文片段）。本地审计用，明确标注不可分享；
+    由 emit_atomic 硬门之外单独落盘（硬门产物保持零明文）。"""
+    def clean(cell):
+        return str(cell).replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n")
+    lines = [
+        "# agent-run-casebook 脱敏审计报告（{}）".format(REPORT_NAME),
+        "# 本地审计用，不可分享：本文件包含被替换的原文敏感片段。",
+        "# 可分享产物为 casebook.html / casebook.md / run.json（均不含原文敏感片段）；本文件仅用于人工复核脱敏是否误伤。",
+        "# 偏移为该规则应用时文本坐标（信息性）；词条命中按长度降序替换。",
+        "",
+        "detail_id\tsource_ref\trule_id\toffset\tlength\t原文片段\t占位符",
+    ]
+    for e in entries:
+        snippet = e.get("snippet", "（run.json 不含原文片段；原文仅见于 redact/all 阶段生成的报告）")
+        lines.append("\t".join([
+            clean(e.get("detail_id", "")), clean(e.get("source_ref", "")),
+            clean(e.get("rule_id", "")), str(e.get("offset", "")),
+            str(e.get("length", "")), clean(snippet), clean(e.get("replacement", ""))]))
+    _write(Path(outdir) / REPORT_NAME, "\n".join(lines) + "\n")
+
+
+def _load_denylist_or_exit2(path):
+    """--denylist 文件缺失或不可读 → 用法错误（exit 2）。"""
+    p = Path(path)
+    if not p.is_file():
+        print("denylist 文件不存在: {}".format(p))
+        return False
+    try:
+        return rd.load_denylist(p)
+    except (OSError, UnicodeDecodeError) as exc:
+        print("denylist 文件读取失败（需 UTF-8）: {}".format(exc))
+        return False
+
+
+def _url_mode(args):
+    """URL 分级档位：--no-urls 全抹 / --keep-urls 保留 query（风险键仍被 strict 硬门拦截）/ 默认保留 host+path。"""
+    if getattr(args, "no_urls", False):
+        return "no-urls"
+    if getattr(args, "keep_urls", False):
+        return "keep-urls"
+    return "default"
+
+
+def _handle_suspects(redacted, strict_pii):
+    """独立宽形态探测（RESIDUAL_SUSPICIOUS，与替换集不同源）。
+    strict：命中即硬门拒绝（调用方负责返回 exit 5）；宽松：记 PII_SUSPECTED 警告放行。
+    返回 (suspects, blocked)。"""
+    suspects = rd.suspect_scan_tree(redacted)
+    if not suspects:
+        return [], False
+    if strict_pii:
+        return suspects, True
+    for rid, path in suspects:
+        redacted.setdefault("warnings", []).append({
+            "code": "PII_SUSPECTED", "source_ref": path,
+            "detail": "形态探测命中疑似敏感信息（--no-strict-pii 已放行，建议人工清洗输入后重建）: {}".format(rid)})
+    return suspects, False
 
 
 # ── 子命令 ──────────────────────────────────────────────────────────
@@ -121,6 +213,11 @@ def cmd_redact(args):
     run = _load_run_raw(args.dir)
     if run is None:
         return EXIT_USAGE
+    denylist = ()
+    if getattr(args, "denylist", None):
+        denylist = _load_denylist_or_exit2(args.denylist)
+        if denylist is False:
+            return EXIT_USAGE
     narrative = None
     if args.narrative:
         narrative = _load_narrative(args.narrative)
@@ -134,17 +231,29 @@ def cmd_redact(args):
             return EXIT_VALIDATE
         run["narrative"] = narrative
         run["narrative_check"] = {"passed": True, "violations": []}
-    redacted, counts = rd.redact_tree(run)
-    redacted["redaction"] = _redaction_stats(counts)
+    audit = []
+    redacted, counts = rd.redact_tree(run, url_mode=_url_mode(args),
+                                      denylist=denylist, audit=audit)
+    entries = _audit_entries(audit)
+    redacted["redaction"] = _redaction_stats(counts, args.strict_pii,
+                                             _url_mode(args), entries, denylist)
+    suspects, blocked = _handle_suspects(redacted, args.strict_pii)
+    if blocked:
+        detail = "; ".join("{}@{}".format(r, p) for r, p in suspects[:10])
+        print("残留扫描（独立宽形态探测）不通过（硬门），run.json 不落盘。命中: {}".format(detail))
+        return EXIT_REDACT
     payload = (_dump(redacted) + "\n").encode("utf-8")
-    hits = rd.residual_scan_bytes(payload)
+    hits = rd.residual_scan_bytes(payload, strict_pii=args.strict_pii,
+                                  url_mode=_url_mode(args), denylist=denylist)
     if hits:
         print("残留扫描不通过（硬门），run.json 不落盘。命中: {}".format(", ".join(hits)))
         return EXIT_REDACT
     outdir = Path(args.dir)
     outdir.mkdir(parents=True, exist_ok=True)
     _write(outdir / "run.json", payload.decode("utf-8"))
+    _write_redaction_report(outdir, entries)
     print("redact 完成 → {}".format(outdir / "run.json"))
+    print("脱敏审计报告（本地审计用，不可分享）→ {}".format(outdir / REPORT_NAME))
     return EXIT_OK
 
 
@@ -166,17 +275,29 @@ def cmd_build(args):
             "casebook.html": html_text,
             "casebook.md": md_text,
             "run.json": run_path.read_bytes(),
-        })
+        }, strict_pii=args.strict_pii, url_mode=_url_mode(args))
     except rd.ResidualLeakError as exc:
         print("残留扫描不通过（硬门），产物不落盘。{}".format(exc))
         return EXIT_REDACT
+    # P2-3：build 从 run.json.details 重建审计报告（不含原文片段；
+    # 原文片段仅存在于 redact / all 阶段生成的报告——同目录已存在时不覆盖）
+    report_path = outdir / REPORT_NAME
+    if report_path.is_file():
+        print("脱敏审计报告已存在，保留 redact/all 阶段版本（含原文片段）: {}".format(report_path))
+    else:
+        _write_redaction_report(outdir, run.get("redaction", {}).get("details", []))
     for p in paths:
         print("产物: {}".format(p))
     return EXIT_OK
 
 
 def cmd_all(args):
-    """主路径：全内存串联，中间模型不落盘；只落三件最终产物。"""
+    """主路径：全内存串联，中间模型不落盘；只落四件最终产物。"""
+    denylist = ()
+    if getattr(args, "denylist", None):
+        denylist = _load_denylist_or_exit2(args.denylist)
+        if denylist is False:
+            return EXIT_USAGE
     try:
         run, report = nz.parse_input(args.input)
     except nz.UnrecognizedInputError as exc:
@@ -203,8 +324,20 @@ def cmd_all(args):
         run["narrative"] = None
         run["narrative_check"] = {"passed": False, "violations": [], "reason": "no-narrative (fact mode)"}
 
-    redacted, counts = rd.redact_tree(run)
-    redacted["redaction"] = _redaction_stats(counts)
+    audit = []
+    redacted, counts = rd.redact_tree(run, url_mode=_url_mode(args),
+                                      denylist=denylist, audit=audit)
+    entries = _audit_entries(audit)
+    redacted["redaction"] = _redaction_stats(counts, args.strict_pii,
+                                             _url_mode(args), entries, denylist)
+    suspects, blocked = _handle_suspects(redacted, args.strict_pii)
+    if blocked:
+        detail = "; ".join("{}@{}".format(r, p) for r, p in suspects[:10])
+        print("残留扫描（独立宽形态探测）不通过（硬门），产物不落盘。命中: {}".format(detail))
+        return EXIT_REDACT
+    if suspects:
+        print("提示：--no-strict-pii 下检测到 {} 处疑似敏感信息，已记入 warnings（PII_SUSPECTED），"
+              "产物仍会写出，请人工复核清洗。".format(len(suspects)))
     try:
         html_text = bc.render_html(redacted)
         md_text = bc.render_markdown(redacted)
@@ -217,12 +350,20 @@ def cmd_all(args):
             "casebook.html": html_text,
             "casebook.md": md_text,
             "run.json": run_json_bytes,
-        })
+        }, strict_pii=args.strict_pii, url_mode=_url_mode(args), denylist=denylist)
     except rd.ResidualLeakError as exc:
         print("残留扫描不通过（硬门），产物不落盘。{}".format(exc))
         return EXIT_REDACT
+    # P2-3：审计报告在硬门产物之后单独落盘（含原文片段，不可分享，不参与残留扫描）
+    _write_redaction_report(outdir, entries)
     print("all 完成：{} 条记录，{} 警告，{} 降级。".format(
-        report["record_count"], report["warnings"], report["parse_errors"]))
+        report["record_count"], len(redacted.get("warnings", [])), report["parse_errors"]))
+    src = redacted.get("source", {})
+    if any(w.get("code") == "CONTRACT_VERSION_MISMATCH" for w in redacted.get("warnings", [])) \
+            or (src.get("contract_version") == "unknown"
+                and src.get("kind") in ("dsh-zip", "dsh-jsonl")):
+        print("提示：输入契约版本未被当前版本锁定，部分字段可能无法识别、整体降级；"
+              "页面顶部已显示横幅。如可提供真实 DSH /export 导出样本，可据此完成适配。")
     levels = {}
     for c in redacted.get("claims", []):
         levels[c["evidence_level"]] = levels.get(c["evidence_level"], 0) + 1
@@ -232,6 +373,7 @@ def cmd_all(args):
         print("降级说明：部分记录不可用或字段未识别，详见产物「复现与未知事项」区块。")
     for p in paths:
         print("产物: {}".format(p))
+    print("产物: {}（本地审计用，不可分享）".format(outdir / REPORT_NAME))
     return EXIT_OK
 
 
@@ -256,9 +398,23 @@ def selftest():
         ("Bearer abcdefgh12345678", "R-BEARER"),
         ("postgres://admin:p4ssw0rd@db.internal:5432/app", "R-URLCRED"),
         ("mongodb+srv://user:pw@cluster.example.net/db", "R-CONN"),
-        ("https://cdn.corp-assets.example/static/app.js", "R-URL"),
+        ("https://api.example.com/cb?access_token=abc123", "R-URL-QUERY"),
+        ("https://wiki.corp.cn/rag-eval", "R-URL-INTERNAL"),
+        ("xhttps://keys.internal/leak", "R-URL-INTERNAL"),
         ("file:///C:/notes/secret.txt", "R-FILEURI"),
         ("Set-Cookie: sessionid=abcdef0123456789; Path=/", "R-COOKIE"),
+        ("-----BEGIN OPENSSL PRIVATE KEY-----\nMIIEvQIB\n-----END OPENSSL PRIVATE KEY-----",
+         "R-PRIVKEY"),
+        ("-----BEGIN OPENSSL PRIVATE KEY-----", "R-PRIVKEY"),
+        ("110105199003074512", "R-CN-ID"),
+        ("13812345678", "R-CN-MOBILE"),
+        ("138-1234-5678", "R-CN-MOBILE"),
+        ("+86 138-1234-5678", "R-CN-MOBILE"),
+        ("6222021234567890123", "R-BANKCARD"),
+        ("部署到 106.53.62.135", "R-IPV4"),
+        ("zhang.wei@corp.cn", "R-EMAIL"),
+        ("服务器密码 Ljh071823!", "R-INLINE-CRED"),
+        ("password=hunter2x", "R-INLINE-CRED"),
         ("C:\\Users\\demo\\Documents\\\u9879\u76ee\\\u62a5\u544a.md", "R-WINPATH"),
         ("C://Users//demo//app//config.ini", "R-WINPATH"),
         ("/home/demo/work/notes.md", "R-POSIXPATH"),
@@ -273,10 +429,108 @@ def selftest():
         "步骤 3 完成，共 12 个工具调用",
         "source_ref: s1/L42/j/toolCalls[0].callId",
         "[REDACTED:R-KEY-OPENAI] 与 [PATH] 与 已投递",
+        "版本 python 3.11.4",
+        "耗时 360000 ms",
+        "改动 3 个文件",
+        "覆盖率 87%",
+        "订单 2026110300001",
+        "端口 6379",
+        "日志行 L4210",
+        "密码错误三次",
+        "密码为空",
+        "密码字段必填",
+        "密码长度至少 8 位",
+        "用户抱怨密码记不住",
+        "参考 https://arxiv.org/abs/2309.15217 与 https://docs.ragas.io/en/stable/ 撰写。",
     ]
     for sample in safe_samples:
         out = rd.redact_text(sample)
         check("脱敏不误伤: {}...".format(sample[:20]), out == sample)
+
+    # URL 分级向量：默认保留 host+path、抹 query、抹内网域名；档位行为各自生效
+    out = rd.redact_text("见 https://api.example.com/cb?access_token=abc123 说明")
+    check("URL 默认档保留 host+path", "https://api.example.com/cb" in out)
+    check("URL 默认档抹 query", "access_token" not in out)
+    check("URL 默认档保留公网外链",
+          rd.redact_text("见 https://arxiv.org/abs/2309.15217") == "见 https://arxiv.org/abs/2309.15217")
+    check("URL no-urls 全抹",
+          "[REDACTED:R-URL]" in rd.redact_text("见 https://arxiv.org/abs/2309.15217", url_mode="no-urls"))
+    check("URL keep-urls 放行 query",
+          "access_token" in rd.redact_text("https://api.example.com/cb?access_token=abc123",
+                                           url_mode="keep-urls"))
+
+    # 残留扫描向量：规则复检剥占位符；独立宽形态探测 strict 开关；fail-closed
+    check("残留扫描不误报占位符",
+          rd.residual_scan_text("密码 [REDACTED:R-INLINE-CRED] [PATH] https://arxiv.org/abs/2309.15217") == [])
+    check("形态探测: 长数字（strict 默认命中）",
+          "R-SUS-DIGITS" in rd.residual_scan_text("订单 202611030000123"))
+    check("形态探测: --no-strict-pii 跳过",
+          not [h for h in rd.residual_scan_text("订单 202611030000123", strict_pii=False)
+               if h.startswith("R-SUS")])
+    check("形态探测: 邮箱 / IPv4 / 私钥头 / 明文凭据",
+          all(rid in rd.residual_scan_text(t) for rid, t in (
+              ("R-SUS-EMAIL", "mail a@b.cn"),
+              ("R-SUS-IPV4", "host 10.1.2.3"),
+              ("R-SUS-PRIVKEY", "-----BEGIN PRIVATE KEY-----"),
+              ("R-SUS-CREDWORD", "password=abcd1234"))))
+    check("形态探测: 高风险 query 键兜底",
+          all(rid in rd.residual_scan_text(t) for rid, t in (
+              ("R-SUS-URLKEY", "see https://a.example/cb?access_token=abc123"),
+              ("R-SUS-URLKEY", "回调 https://a.example/set?sid=x1 完成"),
+              ("R-SUS-URLKEY", "参数 ?client_secret=abcdef 结尾")))
+          and "R-SUS-URLKEY" not in
+          rd.residual_scan_text("https://a.example/cb?[REDACTED:R-URL-QUERY]"))
+    check("--no-urls 档 cred URL 整体抹除且无假阳性",
+          rd.redact_text("回调 https://user:secret@example.com/x", url_mode="no-urls")
+          == "回调 [REDACTED:R-URL]"
+          and rd.residual_scan_text("回调 [REDACTED:R-URL]", url_mode="no-urls") == [])
+    check("形态探测: 定位路径",
+          ("R-SUS-DIGITS", "$.claims[0].text") in rd.suspect_scan_tree(
+              {"claims": [{"text": "订单 202611030000123"}]}))
+
+    # P2-6：计数按实际替换次数累加；审计明细采集（含原文片段，仅供报告）
+    counts = {}
+    out = rd.redact_text("https://a.example/1 https://b.example/2 https://c.example/3",
+                         counts, url_mode="no-urls")
+    check("替换计数按次数累加（3 个 URL → 3）",
+          counts.get("R-URL") == 3 and out.count("[REDACTED:R-URL]") == 3)
+    counts = {}
+    rd.redact_text("13812345678 13812345678 13812345678", counts)
+    check("手机号计数 3", counts.get("R-CN-MOBILE") == 3)
+    audit = []
+    rd.redact_tree({"task": {"goal": "手机 13812345678 与 13987654321"}}, audit=audit)
+    check("审计明细采集（含定位与原文片段）",
+          len(audit) == 2 and all(a["rule_id"] == "R-CN-MOBILE" for a in audit)
+          and all(a["source_ref"] == "$.task.goal" for a in audit)
+          and audit[0]["snippet"] == "13812345678")
+
+    # P2-3：denylist 普通字符串替换、长度降序、占位符保护、幂等、残留复检
+    counts = {}
+    out = rd.redact_text("客户张伟使用了 Atlas-内部代号", counts,
+                         denylist=["Atlas-内部代号", "张伟"])
+    check("denylist 命中（长度降序）",
+          out == "客户[REDACTED:R-DENYLIST]使用了 [REDACTED:R-DENYLIST]"
+          and counts.get("R-DENYLIST") == 2)
+    check("denylist 普通字符串替换（不按 regex 解释）",
+          rd.redact_text("a.c$^ 匹配测试", denylist=["c$^"]) == "a.[REDACTED:R-DENYLIST] 匹配测试")
+    once = rd.redact_text("客户张伟", denylist=["张伟"])
+    check("denylist 幂等", rd.redact_text(once, denylist=["张伟"]) == once)
+    out = rd.redact_text("已脱敏 [REDACTED:R-URL] 与 张伟R-URL尾", denylist=["R-URL"])
+    check("denylist 占位符受保护",
+          out.count("[REDACTED:R-URL]") == 1 and out.endswith("[REDACTED:R-DENYLIST]尾"))
+    check("denylist 残留复检命中",
+          "R-DENYLIST" in rd.residual_scan_text("涉及张伟", denylist=["张伟"]))
+    check("denylist 残留复检不误报占位符",
+          "R-DENYLIST" not in rd.residual_scan_text(
+              "[REDACTED:R-DENYLIST] 已清洗完毕", denylist=["R-URL"]))
+
+    # P2-5：耗时人性化显示（向下取整；原始毫秒保留在 run.json 与 title）
+    check("耗时格式化", bc._fmt_duration(360000) == "6 分 00 秒"
+          and bc._fmt_duration(1500) == "1 秒"
+          and bc._fmt_duration(80) == "80 ms"
+          and bc._fmt_duration(3900000) == "1 小时 05 分 00 秒")
+
+    # P2-1：claim_origin 常量与证据面板说明由渲染层保证（页面测试见 tests/）
 
     # 转义向量
     esc_cases = [
@@ -322,6 +576,7 @@ def selftest():
         "deliverables": [{"id": "d-1", "path": "out.md", "kind": "file", "source_ref": "s1/L2/j/type",
                           "evidence": {"level": "tool-evidence", "verification": "unverified"}}],
         "claims": [{"id": "c-1", "text": "已修复", "source_ref": "s1/L2/j/type",
+                    "claim_origin": "marker",
                     "evidence_level": "tool-evidence", "verification": "unverified",
                     "verification_refs": ["tc-1"]}],
         "automation": [],
@@ -329,7 +584,9 @@ def selftest():
         "narrative": None,
         "narrative_check": {"passed": False, "violations": [], "reason": "no-narrative"},
         "warnings": [],
-        "redaction": {"applied": [], "residual_scan": "passed"},
+        "redaction": {"applied": [], "residual_scan": "passed", "strict_pii": True,
+                      "url_mode": "default", "denylist_terms": 0,
+                      "details_total": 0, "details": []},
     }
     h1, h2 = bc.render_html(synth_run), bc.render_html(synth_run)
     m1, m2 = bc.render_markdown(synth_run), bc.render_markdown(synth_run)
@@ -375,7 +632,7 @@ def run_fixtures():
                 failures.append("{}: 期望 exit {}，实际 exit {}（stderr: {}）".format(
                     name, want, got, (proc.stderr or proc.stdout).strip()[:200]))
                 continue
-            products = ("casebook.html", "casebook.md", "run.json")
+            products = ("casebook.html", "casebook.md", "run.json", REPORT_NAME)
             if want == 0 and not all((outdir / f).is_file() for f in products):
                 failures.append("{}: 期望成功但三件产物不齐".format(name))
             if want != 0 and any((outdir / f).exists() for f in products):
@@ -390,6 +647,25 @@ def run_fixtures():
 
 
 # ── CLI ─────────────────────────────────────────────────────────────
+
+def _add_redaction_flags(p):
+    """redact / build / all 共用的脱敏档位参数。"""
+    p.add_argument("--strict-pii", action=argparse.BooleanOptionalAction, default=True,
+                   help="独立宽形态探测硬门（默认开；--no-strict-pii 仅记 PII_SUSPECTED 警告）")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--no-urls", action="store_true",
+                   help="所有 http(s) URL 全抹（旧行为）")
+    g.add_argument("--keep-urls", action="store_true",
+                   help="host+path 与 query 原样保留（内网域名也放行），仅 URL 凭据兜底；"
+                        "query 含高风险键（access_token / token / secret 等）时仍被 "
+                        "strict 硬门拦截，需清洗或 --no-strict-pii")
+
+
+def _add_denylist_flag(p):
+    """P2-3：--denylist <file>（适用于 all / redact；UTF-8 每行一词条，# 注释）。"""
+    p.add_argument("--denylist", default=None, metavar="FILE",
+                   help="自定义脱敏词条文件（每行一个词条，普通字符串替换，不可分享产物含审计报告）")
+
 
 def build_parser():
     parser = argparse.ArgumentParser(
@@ -409,17 +685,22 @@ def build_parser():
     p = sub.add_parser("redact", help="全树脱敏 run.raw.json → run.json（残留扫描硬门）")
     p.add_argument("dir")
     p.add_argument("--narrative", default=None)
+    _add_redaction_flags(p)
+    _add_denylist_flag(p)
     p.set_defaults(func=cmd_redact)
 
     p = sub.add_parser("build", help="渲染 casebook.html / casebook.md / run.json")
     p.add_argument("dir")
     p.add_argument("--out", default=None)
+    _add_redaction_flags(p)
     p.set_defaults(func=cmd_build)
 
     p = sub.add_parser("all", help="normalize→validate→redact→build 全内存串联")
     p.add_argument("input")
     p.add_argument("--out", required=True)
     p.add_argument("--narrative", default=None)
+    _add_redaction_flags(p)
+    _add_denylist_flag(p)
     p.set_defaults(func=cmd_all)
     return parser
 

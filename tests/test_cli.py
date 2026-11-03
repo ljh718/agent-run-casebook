@@ -16,7 +16,7 @@ import build_casebook as bc
 import casebook as cb
 
 CASEBOOK = SCRIPTS_DIR / "casebook.py"
-PRODUCTS = ("casebook.html", "casebook.md", "run.json")
+PRODUCTS = ("casebook.html", "casebook.md", "run.json", "redaction-report.txt")
 
 
 class TestUsageErrors(unittest.TestCase):
@@ -105,6 +105,210 @@ class TestCwdIndependence(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             for p in PRODUCTS:
                 self.assertTrue((outdir / p).is_file(), p)
+
+
+class TestStrictPiiAndUrlFlags(unittest.TestCase):
+    """P0-2 / P1-3 CLI 档位：strict-pii 默认 fail-closed；URL 分级。"""
+
+    DIGITS_INPUT = ('{"type": "user", "text": "订单流水号 202611030000123，请复核", '
+                    '"ts": "2026-03-05T10:00:00"}\n')
+    URL_INPUT = ('{"type": "user", "text": "参考 https://arxiv.org/abs/2309.15217 撰写", '
+                 '"ts": "2026-03-05T10:00:00"}\n')
+
+    def _write(self, td, content):
+        inp = Path(td) / "input.jsonl"
+        inp.write_text(content, encoding="utf-8")
+        return inp
+
+    def test_strict_pii_default_blocks_suspect(self):
+        with tempfile.TemporaryDirectory() as td:
+            inp = self._write(td, self.DIGITS_INPUT)
+            outdir = Path(td) / "out"
+            self.assertEqual(cb.main(["all", str(inp), "--out", str(outdir)]), 5)
+            self.assertFalse(any((outdir / p).exists() for p in PRODUCTS), "fail-closed 不落盘")
+
+    def test_no_strict_pii_passes_with_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            inp = self._write(td, self.DIGITS_INPUT)
+            outdir = Path(td) / "out"
+            self.assertEqual(cb.main(["all", str(inp), "--out", str(outdir),
+                                      "--no-strict-pii"]), 0)
+            run = json.loads((outdir / "run.json").read_text(encoding="utf-8"))
+            codes = [w.get("code") for w in run.get("warnings", [])]
+            self.assertIn("PII_SUSPECTED", codes)
+            suspect = [w for w in run["warnings"] if w["code"] == "PII_SUSPECTED"][0]
+            self.assertTrue(suspect.get("source_ref"), "PII_SUSPECTED 必须带定位 source_ref")
+            self.assertTrue(suspect.get("detail", "").startswith("形态探测命中"))
+
+    def test_default_mode_preserves_external_url(self):
+        with tempfile.TemporaryDirectory() as td:
+            inp = self._write(td, self.URL_INPUT)
+            outdir = Path(td) / "out"
+            self.assertEqual(cb.main(["all", str(inp), "--out", str(outdir)]), 0)
+            html = (outdir / "casebook.html").read_text(encoding="utf-8")
+            self.assertIn("https://arxiv.org/abs/2309.15217", html)
+
+    def test_no_urls_flag_redacts_all_urls(self):
+        with tempfile.TemporaryDirectory() as td:
+            inp = self._write(td, self.URL_INPUT)
+            outdir = Path(td) / "out"
+            self.assertEqual(cb.main(["all", str(inp), "--out", str(outdir),
+                                      "--no-urls"]), 0)
+            html = (outdir / "casebook.html").read_text(encoding="utf-8")
+            self.assertNotIn("arxiv.org", html)
+            self.assertIn("[REDACTED:R-URL]", html)
+
+    def test_url_flags_mutually_exclusive(self):
+        with tempfile.TemporaryDirectory() as td:
+            inp = self._write(td, self.URL_INPUT)
+            with self.assertRaises(SystemExit) as cm:
+                cb.main(["all", str(inp), "--out", str(td), "--no-urls", "--keep-urls"])
+            self.assertEqual(cm.exception.code, 2)
+
+
+class TestDenylistAndReport(unittest.TestCase):
+    """P2-3 / P2-6：--denylist、redaction-report.txt、run.json 不含原文。"""
+
+    INPUT = ('{"type": "user", "text": "客户张伟来电，回电 13812345678", '
+             '"ts": "2026-03-05T10:00:00"}\n')
+
+    def test_denylist_flag_and_report(self):
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "in.jsonl"
+            inp.write_text(self.INPUT, encoding="utf-8")
+            dl = Path(td) / "dl.txt"
+            dl.write_text("# 注释\n张伟\n\n", encoding="utf-8")
+            outdir = Path(td) / "out"
+            self.assertEqual(cb.main(["all", str(inp), "--out", str(outdir),
+                                      "--denylist", str(dl)]), 0)
+            for p in PRODUCTS:
+                self.assertTrue((outdir / p).is_file(), p)
+            run = json.loads((outdir / "run.json").read_text(encoding="utf-8"))
+            blob = json.dumps(run, ensure_ascii=False)
+            self.assertNotIn("张伟", blob)
+            self.assertNotIn("13812345678", blob)
+            self.assertIn("[REDACTED:R-DENYLIST]", blob)
+            applied = {a["rule"]: a["count"] for a in run["redaction"]["applied"]}
+            self.assertEqual(applied.get("R-DENYLIST"), 1)
+            self.assertEqual(applied.get("R-CN-MOBILE"), 1)
+            self.assertTrue(all("snippet" not in d for d in run["redaction"]["details"]),
+                            "run.json details 不得含原文片段")
+            report = (outdir / "redaction-report.txt").read_text(encoding="utf-8")
+            self.assertIn("不可分享", report)
+            self.assertIn("张伟", report)
+            self.assertIn("13812345678", report)
+            html = (outdir / "casebook.html").read_text(encoding="utf-8")
+            self.assertNotIn("张伟", html)
+            self.assertNotIn("13812345678", html)
+
+    def test_default_report_written_without_denylist(self):
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "in.jsonl"
+            inp.write_text(self.INPUT, encoding="utf-8")
+            outdir = Path(td) / "out"
+            self.assertEqual(cb.main(["all", str(inp), "--out", str(outdir)]), 0)
+            report = (outdir / "redaction-report.txt").read_text(encoding="utf-8")
+            self.assertIn("不可分享", report)
+            self.assertIn("13812345678", report)
+
+    def test_denylist_missing_file_exit_2(self):
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "in.jsonl"
+            inp.write_text(self.INPUT, encoding="utf-8")
+            self.assertEqual(cb.main(["all", str(inp), "--out", str(td),
+                                      "--denylist", str(Path(td) / "nope.txt")]), 2)
+
+    def test_counts_three_urls_in_run_json(self):
+        """P2-6 验收：一条文本含 3 个 URL，对应规则计数必须为 3。"""
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "in.jsonl"
+            inp.write_text('{"type": "user", "text": "a https://x.example/1 '
+                           'https://y.example/2 https://z.example/3", '
+                           '"ts": "2026-03-05T10:00:00"}\n', encoding="utf-8")
+            outdir = Path(td) / "out"
+            self.assertEqual(cb.main(["all", str(inp), "--out", str(outdir),
+                                      "--no-urls"]), 0)
+            run = json.loads((outdir / "run.json").read_text(encoding="utf-8"))
+            applied = {a["rule"]: a["count"] for a in run["redaction"]["applied"]}
+            self.assertEqual(applied.get("R-URL"), 3)
+
+
+class TestUrlClaimLeakRegression(unittest.TestCase):
+    """F-1 / F-2 复测回归：URL query 不再被句读切碎；--no-urls 不因 details 假阳性 exit 5。"""
+
+    def test_assistant_url_query_redacted_in_claims(self):
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "in.jsonl"
+            inp.write_text(
+                '{"type": "assistant", "text": "已配置回调 '
+                'https://api.example.com/cb?access_token=abc123 请查收。", '
+                '"ts": "2026-03-05T10:01:00"}\n', encoding="utf-8")
+            outdir = Path(td) / "out"
+            self.assertEqual(cb.main(["all", str(inp), "--out", str(outdir)]), 0)
+            run = json.loads((outdir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(run["claims"]), 1, "URL 内 ? 不得切分 claim")
+            blob = json.dumps(run, ensure_ascii=False)
+            self.assertNotIn("access_token", blob)
+            html = (outdir / "casebook.html").read_text(encoding="utf-8")
+            self.assertNotIn("access_token", html)
+            self.assertIn("[REDACTED:R-URL-QUERY]", html)
+
+    def test_no_urls_with_cred_url_exit_0(self):
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "in.jsonl"
+            inp.write_text(
+                '{"type": "assistant", "text": "回调 https://user:secret@example.com/x 已处理。", '
+                '"ts": "2026-03-05T10:01:00"}\n', encoding="utf-8")
+            outdir = Path(td) / "out"
+            self.assertEqual(cb.main(["all", str(inp), "--out", str(outdir),
+                                      "--no-urls"]), 0)
+            run = json.loads((outdir / "run.json").read_text(encoding="utf-8"))
+            blob = json.dumps(run, ensure_ascii=False)
+            self.assertNotIn("user:secret", blob)
+            self.assertIn("[REDACTED:R-URL]", blob)
+            self.assertNotIn("https://[REDACTED:R-URLCRED]", blob,
+                             "--no-urls 档 cred URL 应被整体抹除")
+
+    def test_combined_url_sample_zero_leak_default(self):
+        """F-1 验收：userinfo + query token + 多 sid + URL 内 ?/! 的组合样本。"""
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "in.jsonl"
+            inp.write_text(
+                '{"type": "assistant", "text": "回调 https://user:secret@example.com/cb'
+                '?access_token=abc123!ok 与 https://a.example/set?sid=x1 和 '
+                'https://b.example/set?sid=x2。", "ts": "2026-03-05T10:01:00"}\n',
+                encoding="utf-8")
+            outdir = Path(td) / "out"
+            self.assertEqual(cb.main(["all", str(inp), "--out", str(outdir)]), 0)
+            run = json.loads((outdir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(run["claims"]), 1, "URL 不被句读切断")
+            blob = json.dumps(run, ensure_ascii=False)
+            for bad in ("user:secret", "access_token", "abc123", "sid=x1", "sid=x2"):
+                self.assertNotIn(bad, blob, bad)
+            for p in ("casebook.html", "casebook.md"):
+                text = (outdir / p).read_text(encoding="utf-8")
+                for bad in ("user:secret", "access_token", "abc123", "sid=x"):
+                    self.assertNotIn(bad, text, "{}: {}".format(p, bad))
+
+    def test_keep_urls_token_query_strict_exit5(self):
+        """F-1 兜底：keep-urls 保留的 query 若含高风险键，strict 默认 exit 5。"""
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "in.jsonl"
+            inp.write_text(
+                '{"type": "assistant", "text": "回调 https://a.example/cb'
+                '?access_token=abc123 已登记。", "ts": "2026-03-05T10:01:00"}\n',
+                encoding="utf-8")
+            outdir = Path(td) / "out"
+            self.assertEqual(cb.main(["all", str(inp), "--out", str(outdir),
+                                      "--keep-urls"]), 5)
+            self.assertFalse(any((outdir / p).exists() for p in PRODUCTS))
+            # 宽松档放行并记 PII_SUSPECTED
+            outdir2 = Path(td) / "out2"
+            self.assertEqual(cb.main(["all", str(inp), "--out", str(outdir2),
+                                      "--keep-urls", "--no-strict-pii"]), 0)
+            run = json.loads((outdir2 / "run.json").read_text(encoding="utf-8"))
+            codes = [w.get("code") for w in run.get("warnings", [])]
+            self.assertIn("PII_SUSPECTED", codes)
 
 
 class TestSelfcheckEntries(unittest.TestCase):

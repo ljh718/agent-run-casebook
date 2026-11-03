@@ -1,0 +1,30 @@
+{
+  "title": "时区换算回归修复复盘",
+  "summary": "针对 dateutils.py 的时区换算回归，先复现失败，再修改跨日换算分支并补夏令时边界用例，复跑回归后交付。",
+  "key_nodes": [
+    {
+      "ref": "step-1",
+      "heading": "复现失败点",
+      "blurb": "先运行回归，确认 dateutils.py 的跨日换算分支存在问题。"
+    },
+    {
+      "ref": "step-2",
+      "heading": "首次修复",
+      "blurb": "修改 dateutils.py 的跨日换算分支。"
+    },
+    {
+      "ref": "step-3",
+      "heading": "补夏令时边界用例",
+      "blurb": "补上夏令时边界用例后再次运行回归。"
+    },
+    {
+      "ref": "step-4",
+      "heading": "交付",
+      "blurb": "交付 src/dateutils.py 与 docs/fix-notes.md。"
+    }
+  ],
+  "reader_notes": [
+    "点击来源锚点可回溯原文；证据等级由脚本按检查记录确定性判定，叙事不携带等级。",
+    "主张对应的检查状态与徽标以页面证据面板为准。"
+  ]
+}

@@ -14,7 +14,7 @@ import hashlib
 
 SCHEMA_VERSION = "1.0.0"
 GENERATOR_NAME = "agent-run-casebook"
-GENERATOR_VERSION = "1.0.0"
+GENERATOR_VERSION = "1.1.0"
 
 # ── 五级证据词表 ────────────────────────────────────────────────────
 EVIDENCE_LEVELS = (
@@ -41,11 +41,25 @@ CLAIM_MARKERS = (
     "fixed", "completed", "succeeded", "success", "done", "shipped",
 )
 
-# 证据等级禁止进入叙事（validate_case 使用；ASCII 词不分大小写）
-NARRATIVE_LEVEL_WORDS = (
-    "已复验", "已验证", "已执行", "已完成", "已复核",
-    "verified", "unverified", "failed",
-    "external-verification", "tool-evidence", "self-report",
+# 主张来源（P2-1 方案 A）：marker=命中标记词进入五级判定；statement=普通陈述固定自报
+CLAIM_ORIGINS = ("marker", "statement")
+
+# 证据等级禁止进入叙事（validate_case 使用；统一 re.I 匹配）。分两类（v1.1.0）：
+#   A 类：等级专名（五级页面标签本体 + 英文枚举值 + 断言形态），出现即违规
+#   B 类：断言性搭配，只在「测试/回归/验收/检查/全部 + 通过」等验收语境下违规
+# 注意：裸词「通过」不单列——子串匹配会误伤「通过 ssh 连接」等正常表达。
+NARRATIVE_LEVEL_PATTERNS = (
+    # A 类：五级标签本体 + 英文枚举值
+    r"外部复验", r"验证失败", r"工具证据", r"未验证", r"未复验",
+    r"Agent\s*自报",
+    r"已复验", r"已验证", r"已执行", r"已完成", r"已复核", r"已投递",
+    r"external-verification", r"tool-evidence", r"self-report",
+    r"\bverified\b", r"\bunverified\b", r"\bfailed\b",
+    # A 类：断言「未经/尚未验证」形态（覆盖「还没验证」等变体）
+    r"(?:还没|尚未|未|没有|未经)验证",
+    # B 类：仅在验收语境下违规
+    r"(?:测试|回归|用例|验收|检查|全部)[^。；\n]{0,6}?(?:通过|passed|pass)(?![A-Za-z0-9])",
+    r"\b(?:all\s+)?(?:tests?|checks?)\s+(?:passed|pass)\b",
 )
 
 # ── 结构化敏感键（值整体替换，见 redact.py R-STRUCT） ───────────────

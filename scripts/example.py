@@ -24,7 +24,7 @@ CASEBOOK = SCRIPT_DIR / "casebook.py"
 EXAMPLES_DIR = SKILL_ROOT / "examples"
 
 EXAMPLE_NAMES = ("01-bugfix", "02-research-report", "03-data-analysis")
-PRODUCTS = ("casebook.html", "casebook.md", "run.json")
+PRODUCTS = ("casebook.html", "casebook.md", "run.json", "redaction-report.txt")
 
 
 def find_input(case_dir):
@@ -56,6 +56,10 @@ def main(argv=None):
             continue
         outdir = out_root / name
         cmd = [sys.executable, str(CASEBOOK), "all", str(input_path), "--out", str(outdir)]
+        # P2-2：案例目录含 narrative.json 时按叙事版构建（01-bugfix 为完整模式 + 有叙事的主推示例）
+        narr = case_dir / "narrative.json"
+        if narr.is_file():
+            cmd += ["--narrative", str(narr)]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         ok = proc.returncode == 0 and all((outdir / p).is_file() for p in PRODUCTS)
         print("[{}] {} -> exit {}".format("成功" if ok else "失败", name, proc.returncode))

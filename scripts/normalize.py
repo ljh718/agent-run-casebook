@@ -403,6 +403,31 @@ def collect_unknown_fields(record, contract_keys):
 # ── 组装统一 Run 模型 ───────────────────────────────────────────────
 
 _SENT_SPLIT_RE = re.compile(r"(?<=[。！？!?])\s*|\n+")
+# URL 整体占位保护（F-1）：句读切点不应命中 URL 内部的 ? / ! 等字符，
+# 否则 query 值被切成独立句子，绕过脱敏规则与形态探测。
+_URL_TOKEN_RE = re.compile(r"(?i)https?://[^\s'\"<>]+")
+_URL_STASH_FMT = "\x00URL{}\x00"
+_URL_UNSTASH_RE = re.compile("\x00URL(\\d+)\x00")
+
+
+def _split_sentences(text):
+    """确定性句读：先对 URL 整体占位保护，切分后在各句内还原。"""
+    urls = []
+
+    def _stash(m):
+        urls.append(m.group(0))
+        return _URL_STASH_FMT.format(len(urls) - 1)
+
+    guarded = _URL_TOKEN_RE.sub(_stash, text)
+    out = []
+    for sent in _SENT_SPLIT_RE.split(guarded):
+        if not sent:
+            continue
+        restored = _URL_UNSTASH_RE.sub(
+            lambda m: urls[int(m.group(1))], sent).strip()
+        if restored:
+            out.append(restored)
+    return out
 
 
 def _window_events(events, start_idx):
@@ -490,15 +515,19 @@ def assemble_run_model(kind, events, inputs, warnings, degradations, skipped_mem
 
     # 主张与验证记录归属（确定性）：状态型事件（check / tool_result）归属到
     # 与之最近的主张所在 assistant 事件（距离并列时取前面），不 guess 语义。
-    claim_specs = []  # (assistant_idx, sentence)
+    # 主张抽取（P2-1 方案 A）：assistant 的每一句自然语言陈述都记录为 claim。
+    # 句读规则（确定性）：中文句号 / 问号 / 感叹号（含英文 ? !）后切分，换行切分；
+    # 英文句点不切分（避免切碎小数与缩写）。命中 CLAIM_MARKERS 的句子（origin=marker）
+    # 进入五级证据判定；未命中的普通陈述（origin=statement）固定 Agent 自报，
+    # 不参与验证记录归属，不因工具或检查记录升级。
+    claim_specs = []  # (assistant_idx, sentence, origin)
     for i, ev in enumerate(events):
         if ev["etype"] != "assistant":
             continue
-        for sentence in _SENT_SPLIT_RE.split(ev["text"]):
-            sentence = sentence.strip()
-            if sentence and rm.is_completion_claim(sentence):
-                claim_specs.append((i, sentence))
-    claim_assistant_idx = sorted({i for i, _ in claim_specs})
+        for sentence in _split_sentences(ev["text"]):
+            origin = "marker" if rm.is_completion_claim(sentence) else "statement"
+            claim_specs.append((i, sentence, origin))
+    claim_assistant_idx = sorted({i for i, _s, o in claim_specs if o == "marker"})
 
     def _nearest_claim_assistant(j):
         if not claim_assistant_idx:
@@ -532,18 +561,26 @@ def assemble_run_model(kind, events, inputs, warnings, degradations, skipped_mem
 
     claims = []
     claim_n = 0
-    for i, sentence in claim_specs:
+    for i, sentence, origin in claim_specs:
         claim_n += 1
         ev = events[i]
-        slot = attributed.get(i, {"statuses": [], "refs": []})
-        verdict = rm.decide_evidence({"text": sentence}, slot["statuses"])
-        for wmsg in verdict["warnings"]:
-            warnings.append({"code": "EVIDENCE_STATUS_UNKNOWN",
-                             "source_ref": ev["ref"], "detail": wmsg})
+        if origin == "marker":
+            slot = attributed.get(i, {"statuses": [], "refs": []})
+            verdict = rm.decide_evidence({"text": sentence}, slot["statuses"])
+            for wmsg in verdict["warnings"]:
+                warnings.append({"code": "EVIDENCE_STATUS_UNKNOWN",
+                                 "source_ref": ev["ref"], "detail": wmsg})
+            level = verdict["level"]
+            verification = verdict["verification"]
+            refs = list(dict.fromkeys(slot["refs"]))
+        else:
+            # P2-1 方案 A：普通陈述固定 self-report，不得因工具 / 检查记录升级或降级
+            level, verification, refs = "self-report", "unverified", []
         claims.append({
             "id": "c-{}".format(claim_n), "text": sentence, "source_ref": ev["ref"],
-            "evidence_level": verdict["level"], "verification": verdict["verification"],
-            "verification_refs": list(dict.fromkeys(slot["refs"]))})
+            "claim_origin": origin,
+            "evidence_level": level, "verification": verification,
+            "verification_refs": refs})
 
     # 交付物（按 path 去重，保留首个来源）
     deliverables, seen_paths = [], set()
@@ -643,5 +680,6 @@ def parse_input(path, ordinal=1):
     else:
         events, inputs, warnings, degradations, skipped, state = parse_markdown(path, ordinal)
     if not events:
-        raise UnrecognizedInputError("未解析到任何有效记录: {}".format(path))
+        raise UnrecognizedInputError(
+            "输入可识别但未解析到任何有效记录（0 条）: {}".format(path))
     return assemble_run_model(kind, events, inputs, warnings, degradations, skipped, state)

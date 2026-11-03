@@ -183,6 +183,90 @@ class TestClaimToolWindow(unittest.TestCase):
         self.assertEqual(run["claims"][0]["verification"], "unverified")
 
 
+class TestStatementClaims(unittest.TestCase):
+    """P2-1 方案 A：普通 assistant 陈述也进入主张面板，固定 Agent 自报。"""
+
+    def _parse(self, tmp_text):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "in.jsonl"
+            p.write_text(tmp_text, encoding="utf-8")
+            run, _ = nz.parse_input(p)
+        return run
+
+    def test_statement_claim_self_report_not_upgraded(self):
+        run = self._parse(
+            json.dumps({"type": "user", "text": "整理数据", "ts": "2026-03-01T10:00:00"},
+                       ensure_ascii=False) + "\n"
+            + json.dumps({"type": "assistant",
+                          "text": "已完成数据整理。部分图表仍在渲染中。",
+                          "ts": "2026-03-01T10:01:00"}, ensure_ascii=False) + "\n"
+            + json.dumps({"type": "tool", "callId": "c-1", "name": "summarize",
+                          "ts": "2026-03-01T10:02:00"}, ensure_ascii=False) + "\n"
+            + json.dumps({"type": "check", "name": "渲染检查", "status": "pass",
+                          "ts": "2026-03-01T10:03:00"}, ensure_ascii=False) + "\n")
+        origins = [c["claim_origin"] for c in run["claims"]]
+        self.assertEqual(origins, ["marker", "statement"])
+        marker = run["claims"][0]
+        self.assertEqual(marker["evidence_level"], "external-verification")
+        stmt = run["claims"][1]
+        self.assertEqual(stmt["text"], "部分图表仍在渲染中。")
+        self.assertEqual(stmt["evidence_level"], "self-report")
+        self.assertEqual(stmt["verification"], "unverified")
+        self.assertEqual(stmt["verification_refs"], [],
+                         "普通陈述不得因检查记录获得验证引用")
+
+    def test_statement_claim_not_downgraded_by_fail(self):
+        run = self._parse(
+            json.dumps({"type": "user", "text": "排查任务", "ts": "2026-03-01T10:00:00"},
+                       ensure_ascii=False) + "\n"
+            + json.dumps({"type": "assistant", "text": "先查看日志定位问题。",
+                          "ts": "2026-03-01T10:01:00"}, ensure_ascii=False) + "\n"
+            + json.dumps({"type": "check", "name": "探针", "status": "fail",
+                          "ts": "2026-03-01T10:02:00"}, ensure_ascii=False) + "\n")
+        self.assertEqual([c["claim_origin"] for c in run["claims"]], ["statement"])
+        self.assertEqual(run["claims"][0]["evidence_level"], "self-report")
+
+    def test_all_sentences_deterministic(self):
+        run = self._parse(
+            json.dumps({"type": "user", "text": "任务", "ts": "2026-03-01T10:00:00"},
+                       ensure_ascii=False) + "\n"
+            + json.dumps({"type": "assistant",
+                          "text": "第一步已完成。\n第二步还没做！ doing fine?",
+                          "ts": "2026-03-01T10:01:00"}, ensure_ascii=False) + "\n")
+        texts = [c["text"] for c in run["claims"]]
+        self.assertEqual(texts, ["第一步已完成。", "第二步还没做！", "doing fine?"])
+
+
+class TestSentenceSplitUrlGuard(unittest.TestCase):
+    """F-1：URL 内部的 ? / ! 不得作句读切点（否则 query 值成独立句子绕过脱敏）。"""
+
+    def _parse(self, tmp_text):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "in.jsonl"
+            p.write_text(tmp_text, encoding="utf-8")
+            run, _ = nz.parse_input(p)
+        return run
+
+    def test_url_query_kept_whole_in_claim(self):
+        run = self._parse(
+            json.dumps({"type": "assistant",
+                        "text": "已配置回调 https://api.example.com/cb?access_token=abc123 请查收。",
+                        "ts": "2026-03-05T10:01:00"}, ensure_ascii=False) + "\n")
+        texts = [c["text"] for c in run["claims"]]
+        self.assertEqual(texts,
+                         ["已配置回调 https://api.example.com/cb?access_token=abc123 请查收。"])
+
+    def test_split_sentences_helper(self):
+        self.assertEqual(
+            nz._split_sentences("先做 a。再访问 https://x.example/cb?token=abc 完成。收尾！"),
+            ["先做 a。", "再访问 https://x.example/cb?token=abc 完成。", "收尾！"])
+
+    def test_bang_in_url_not_split(self):
+        self.assertEqual(
+            nz._split_sentences("见 https://x.example/hello!world 页面。"),
+            ["见 https://x.example/hello!world 页面。"])
+
+
 class TestUnknownFields(unittest.TestCase):
     def test_unknown_top_level_field(self):
         with tempfile.TemporaryDirectory() as td:

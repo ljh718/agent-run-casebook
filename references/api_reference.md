@@ -7,11 +7,28 @@
 |---|---|---|
 | normalize | casebook.py normalize 输入 --out 目录 | 识别、解析、配对，产出原始运行模型与解析报告 |
 | validate | casebook.py validate 目录 | schema、引用、叙事白名单校验，产出校验报告 |
-| redact | casebook.py redact 目录 | 全树脱敏原始模型（可附 --narrative），产出脱敏后模型 |
+| redact | casebook.py redact 目录 [--narrative 文件] [--denylist 文件] | 全树脱敏原始模型，产出脱敏后模型与脱敏审计报告 |
 | build | casebook.py build 目录 [--out 目录] | 渲染 HTML 与 Markdown 摘要，原子落盘 |
-| all | casebook.py all 输入 --out 目录 [--narrative 文件] | 全内存串联前四步，只落三件最终产物 |
+| all | casebook.py all 输入 --out 目录 [--narrative 文件] [--denylist 文件] | 全内存串联前四步，只落四件最终产物 |
 | --selftest | 内置向量自检 | 脱敏、转义、证据判定、幂等 |
 | --fixtures | 按 ../tests/fixtures/fixtures.json 回归 | good 全过，bad 逐条命中期望退出码 |
+
+脱敏档位（redact / build / all 共用）：`--strict-pii` / `--no-strict-pii`（独立宽形态
+探测硬门，默认开）、`--no-urls`（URL 全抹）、`--keep-urls`（host+path 与 query 原样
+保留、内网域名也放行，仅 URL 凭据兜底；query 含高风险键 access_token / token /
+secret / api_key / apikey / session / sid / auth / code 等时仍被独立形态探测
+R-SUS-URLKEY 在 strict 模式拦截——keep-urls 不是绕过硬门的通道，需清洗输入或
+`--no-strict-pii`）、`--denylist <文件>`（自定义词条脱敏：UTF-8 每行一个词条，
+空行与 # 注释忽略，按长度降序做普通字符串替换，命中替换为 [REDACTED:R-DENYLIST]）。
+
+## 产物清单与分享边界
+
+| 产物 | 内容 | 分享性 |
+|---|---|---|
+| casebook.html | 离线单文件案例页（无脚本、无外部请求、全字段转义） | 可分享候选 |
+| casebook.md | Markdown 摘要 | 可分享候选 |
+| run.json | 脱敏后的运行模型（redaction.details 不含原文片段） | 可分享候选 |
+| redaction-report.txt | 脱敏审计报告：detail_id、source_ref、规则、原文片段、占位符（all / redact 阶段含原文；build 从 run.json 重建时不含原文，同目录已存在时不覆盖） | **本地审计用，不可分享** |
 
 ## 退出码
 
@@ -33,11 +50,11 @@
 | task | goal、started_at、ended_at（仅源数据存在时出现） |
 | steps / tool_calls | 步骤（含完整原文 text）与工具调用（状态为原文） |
 | deliverables | 交付物：path、kind、evidence（等级与验证状态） |
-| claims | 助手主张原文、证据等级、验证状态、verification_refs |
+| claims | 助手主张原文、claim_origin（marker / statement，见 evidence-model.md）、证据等级、验证状态、verification_refs |
 | automation | kind、label（恒为「已投递」）、delivered_at |
-| metrics | duration_ms / tokens / cost，缺键即隐藏 |
+| metrics | duration_ms / tokens / cost，缺键即隐藏；页面耗时为人性化显示，本字段保留原始毫秒 |
 | narrative / narrative_check | 叙事内容与白名单核验结果 |
-| redaction | 各规则命中计数与残留扫描结论 |
+| redaction | applied（按实际替换次数计数）、residual_scan、strict_pii、url_mode、denylist_terms、details（detail_id / source_ref / rule_id / replacement / offset / length，**不含原文**，上限 50 条，总数见 details_total；replacement 的 URL scheme 统一掩码为 [SCHEME]://，offset 为该规则应用时文本坐标，仅作信息性参考） |
 | warnings | code、source_ref、detail 三元组列表 |
 
 中间文件（normalize 单步落盘的原始模型）首键带醒目警告字段

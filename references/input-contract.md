@@ -15,6 +15,15 @@
 文本模式（mode=text）下工具统计、耗时、Token、成本必然缺失，页面信息密度降低，
 这是设计内行为而非缺陷；缺失指标不渲染、不估算。
 
+## 文本模式的证据强度上限（页面顶部有显著横幅提示）
+
+- 无独立检查记录 → 主张不可判为 external-verification / failed；
+- 交付物最高为 tool-evidence（来源为助手 / 工具侧文本）或 self-report（用户侧）；
+- 契约版本恒为 unknown（属文本模式的预期降级，不额外显示契约横幅）；
+- 工具状态只能从正文行的受控词表行嗅探，嗅探不到即无验证记录。
+以上上限意味着文本模式案例页的证明力天然弱于完整模式，页面顶部横幅会明示
+这一点；使用者应优先提供 DSH /export ZIP 或 session JSONL。
+
 ## 识别规则（确定性嗅探）
 
 1. 文件头两字节为 PK 魔数 → dsh-zip。
@@ -53,6 +62,6 @@ automation 与 schedule。配对规则：
 | 情形 | 行为 |
 |---|---|
 | 个别坏 JSON 行 | 计入 degradations（PARSE_ERROR）并继续解析，页面降级清单可见 |
-| 整文件无可识别记录 | UnrecognizedInputError，CLI 退出码 3，不产出产物 |
-| 契约版本不在锁定集 | contract_version 置 unknown，产出 CONTRACT_VERSION_MISMATCH 警告，整体降级并保留来源引用 |
+| 整文件无可识别记录 | UnrecognizedInputError，CLI 退出码 3，不产出产物；错误信息区分「格式不可识别」与「格式可识别但 0 条有效记录」 |
+| 契约版本不在锁定集 | contract_version 置 unknown，产出 CONTRACT_VERSION_MISMATCH 警告，整体降级并保留来源引用；页面顶部显示契约版本横幅，CLI stdout 输出可操作提示（建议提供真实 DSH 导出样本以适配） |
 | system / developer 消息与隐藏推理 | 结构排除，从源头不进入运行模型，只记排除计数 |

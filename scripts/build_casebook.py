@@ -142,6 +142,51 @@ def _fmt_ts(ts):
     return esc(ts) if ts else ""
 
 
+def _fmt_duration(ms):
+    """P2-5：毫秒 → 人性化显示（向下取整，不四舍五入；原始毫秒保留在 run.json
+    与 HTML title / 括注中）。不足 1 秒保持原始毫秒。覆盖小时 / 分 / 秒。"""
+    ms = int(ms)
+    total_s = ms // 1000
+    if total_s <= 0:
+        return "{} ms".format(ms)
+    h, rem = divmod(total_s, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return "{} 小时 {:02d} 分 {:02d} 秒".format(h, m, s)
+    if m:
+        return "{} 分 {:02d} 秒".format(m, s)
+    return "{} 秒".format(s)
+
+
+def _mode_banner(run):
+    """P2-2：文本模式页面顶部显著横幅（不是页面中部小字）。"""
+    if run.get("source", {}).get("mode") != "text":
+        return ""
+    return ('<div class="banner">文本模式提示：本页由会话 Markdown 文本构建——'
+            '无耗时 / Token / 成本指标，无独立检查记录可复验，契约版本未知；'
+            '交付物与主张的证据强度受限（最高为工具证据，用户侧来源仅 Agent 自报）。'
+            '缺失指标不渲染、不估算，页面信息密度降低属设计内行为。</div>')
+
+
+def _contract_banner(run):
+    """P2-4：契约版本不匹配 / 完整模式契约未知时页面顶部显著横幅。
+    文本模式契约恒为 unknown，由文本模式横幅覆盖，不重复提示。"""
+    src = run.get("source", {})
+    if src.get("mode") == "text":
+        return ""
+    mismatch = any(w.get("code") == "CONTRACT_VERSION_MISMATCH"
+                   for w in run.get("warnings", []))
+    if not mismatch and src.get("contract_version") == "unknown" \
+            and src.get("kind") in ("dsh-zip", "dsh-jsonl"):
+        mismatch = True
+    if not mismatch:
+        return ""
+    return ('<div class="banner">契约版本提示：输入契约版本未被当前版本锁定'
+            '（锁定集 v2），部分字段可能无法识别、相关内容整体降级；'
+            '详见「复现与未知事项」的降级清单与警告。'
+            '如可提供真实 DSH /export 导出样本，可据此完成适配。</div>')
+
+
 # ── 区块渲染 ────────────────────────────────────────────────────────
 
 def _section_header(run):
@@ -155,16 +200,19 @@ def _section_header(run):
     badges = ['<span class="badge b-mode">{}</span>'.format(
         esc("文本模式" if mode == "text" else "完整模式"))]
     metrics = run.get("metrics", {})
-    for key, label, fmt in (("duration_ms", "总耗时", "{} ms"),
-                            ("tokens", "Token 用量", "{}"),
-                            ("cost", "成本", "{}")):
-        if key in metrics:  # 缺失指标不渲染、不估算
-            badges.append(_badge("b-tool", label + "：" + fmt.format(metrics[key])))
+    if "duration_ms" in metrics:  # 缺失指标不渲染、不估算；原始毫秒保留在 title 与 run.json
+        raw = metrics["duration_ms"]
+        badges.append('<span class="badge b-tool" title="{} ms">总耗时：{}</span>'.format(
+            esc(raw), esc(_fmt_duration(raw))))
+    for key, label in (("tokens", "Token 用量"), ("cost", "成本")):
+        if key in metrics:
+            badges.append(_badge("b-tool", label + "：{}".format(metrics[key])))
     if run.get("narrative_check", {}).get("passed") is False and run.get("narrative"):
         badges.append(_badge("b-unverified", "叙事未通过核验，已按事实模式渲染"))
-    return ("<section class=\"card\" id=\"casebook-header\"><h1>{}</h1>{}</section>"
-            .format(esc(title), "".join(chips)) +
-            '<div class="badges">{}</div>'.format("".join(badges)))
+    header = ("<section class=\"card\" id=\"casebook-header\"><h1>{}</h1>{}</section>"
+              .format(esc(title), "".join(chips)) +
+              '<div class="badges">{}</div>'.format("".join(badges)))
+    return _mode_banner(run) + _contract_banner(run) + header
 
 
 def _page_title(run):
@@ -237,6 +285,10 @@ def _section_keypath(run):
 
 def _section_evidence(run):
     parts = ['<h2 id="evidence">证据面板</h2>']
+    # P2-1：面板覆盖范围明示，避免读者误以为面板只是标记词命中句
+    parts.append('<p class="muted">主张抽取说明：面板同时包含标记词命中句'
+                 '（进入五级判定）与普通 assistant 陈述（仅作 Agent 自报，'
+                 '不因工具或检查记录升级；claim_origin 区分 marker / statement）。</p>')
     claims = run.get("claims", [])
     if not claims:
         parts.append('<p class="muted">（无主张记录）</p>')
@@ -271,7 +323,9 @@ def _section_timeline(run):
             if call.get("status"):
                 bits.append(' 状态：<span class="mono">{}</span>'.format(esc(call.get("status"))))
             if call.get("duration_ms") is not None:
-                bits.append(' 耗时：{} ms'.format(call.get("duration_ms")))
+                bits.append(' 耗时：{}（{} ms）'.format(
+                    esc(_fmt_duration(call.get("duration_ms"))),
+                    esc(call.get("duration_ms"))))
             bits.append(' {}</li>'.format(_source_link(call.get("source_ref", ""))))
             inner.append('<ul>' + "".join(bits) + '</ul>')
         unknown = step.get("unknown_fields", [])
@@ -397,9 +451,13 @@ def render_markdown(run):
     goal = run.get("task", {}).get("goal")
     if goal:
         lines.append("- 任务目标：{}".format(goal))
-    for key, label, fmt in (("duration_ms", "总耗时", "{} ms"), ("tokens", "Token 用量", "{}"), ("cost", "成本", "{}")):
+    for key, label in (("duration_ms", "总耗时"), ("tokens", "Token 用量"), ("cost", "成本")):
         if key in run.get("metrics", {}):
-            lines.append("- {}：{}".format(label, fmt.format(run["metrics"][key])))
+            value = run["metrics"][key]
+            if key == "duration_ms":
+                lines.append("- {}：{}（{} ms）".format(label, _fmt_duration(value), value))
+            else:
+                lines.append("- {}：{}".format(label, value))
     narrative = run.get("narrative")
     if narrative and run.get("narrative_check", {}).get("passed"):
         lines += ["", "## 概览", "", narrative.get("summary", "")]
@@ -418,7 +476,9 @@ def render_markdown(run):
                 rm.EVIDENCE_LABELS.get(d.get("evidence", {}).get("level", "unverified"), "未验证")))
     else:
         lines.append("（无交付物记录）")
-    lines += ["", "## 证据面板", "", "| 主张（原文） | 证据等级 | 验证状态 | 来源 |", "|---|---|---|---|"]
+    lines += ["", "## 证据面板", "", "主张抽取说明：面板同时包含标记词命中句（进入五级判定）"
+              "与普通 assistant 陈述（仅作 Agent 自报）。",
+              "", "| 主张（原文） | 证据等级 | 验证状态 | 来源 |", "|---|---|---|---|"]
     if run.get("claims"):
         for c in run["claims"]:
             lines.append("| {} | {} | {} | `{}` |".format(
@@ -444,13 +504,15 @@ def render_markdown(run):
     return "\n".join(lines) + "\n"
 
 
-def emit_atomic(outdir, files):
-    """内存组装 → 残留扫描 → 临时文件 → 原子改名。任一命中则整体失败、不落盘。"""
+def emit_atomic(outdir, files, strict_pii=True, url_mode="default", denylist=()):
+    """内存组装 → 残留扫描（两套机制 + denylist 复检）→ 临时文件 → 原子改名。
+    任一命中则整体失败、不落盘。"""
     outdir = Path(outdir)
     payloads = {}
     for name, content in files.items():
         data = content if isinstance(content, bytes) else content.encode("utf-8")
-        hits = rd.residual_scan_bytes(data)
+        hits = rd.residual_scan_bytes(data, strict_pii=strict_pii, url_mode=url_mode,
+                                      denylist=denylist)
         if hits:
             raise rd.ResidualLeakError(hits)
         payloads[name] = data

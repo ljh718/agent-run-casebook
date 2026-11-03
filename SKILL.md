@@ -14,7 +14,7 @@ examples_en:
   - "Turn this DSH /export archive into a shareable casebook."
   - "Read this session.v2.jsonl and build an evidence-graded run report."
   - "Summarize this failing-test-to-passing-regression run for review."
-version: 1.0.2
+version: 1.1.0
 author: 刘俊涵
 agent_created: true
 ---
@@ -44,19 +44,39 @@ agent_created: true
 1. 识别用户明确提供的输入文件（ZIP / JSONL / Markdown）；识别规则与降级口径见 references/input-contract.md。
 2. 运行 `python scripts/casebook.py normalize <输入> --out <工作目录>` 生成原始运行模型；该中间文件含未脱敏内容，不得分享给用户。
 3. 依据事实筛选 3-7 个关键节点、撰写面向读者的标题与摘要，产出叙事文件；叙事只能改表述、选步骤、加读者解释，不得新增事实、指标、交付物或证据等级。schema 与白名单规则见 references/api_reference.md。
-4. 运行 `python scripts/casebook.py all <输入> --out <输出目录> --narrative <叙事文件路径>` 完成校验、脱敏与构建；无叙事时省略 --narrative 参数按事实模式渲染；也可分步运行 validate / redact / build。
+4. 运行 `python scripts/casebook.py all <输入> --out <输出目录> --narrative <叙事文件路径> [--denylist <词条文件>]` 完成校验、脱敏与构建；无叙事时省略 --narrative 参数按事实模式渲染；也可分步运行 validate / redact / build。姓名、公司名等自然语言实体不自动脱敏，请通过 --denylist 词条文件提供（每行一个词条，UTF-8，# 注释）。
 5. 向用户报告产物路径、证据分级摘要与降级说明；叙事核验未通过时如实说明已按事实模式渲染。
 
 ## 输出规范
 
-- 三件产物写入 --out 指定目录：casebook.html（离线单文件页）、casebook.md（Markdown 摘要）、run.json（脱敏后的运行模型）。
-- 缺失指标（耗时 / Token / 成本）整个区块不渲染、不估算；文本模式在页面明示降级。
+- 四件产物写入 --out 指定目录：casebook.html（离线单文件页）、casebook.md（Markdown 摘要）、run.json（脱敏后的运行模型）、redaction-report.txt（脱敏审计报告）。
+- **可分享候选产物为 casebook.html / casebook.md / run.json**（页面与运行模型不含原文敏感片段）；**redaction-report.txt 为本地审计用，不可分享**，仅供使用者复核脱敏是否有误伤。报告含原文片段的版本由 all / redact 阶段生成；分步流程中 build 从 run.json 重建的报告不含原文（同目录已存在时不覆盖，保留含原文版本）。
+- 主张抽取覆盖：证据面板同时包含标记词命中句（进入五级判定）与普通 assistant 陈述（仅作 Agent 自报，不因工具或检查记录升级；claim_origin 区分 marker / statement）。
+- 缺失指标（耗时 / Token / 成本）整个区块不渲染、不估算；页面耗时以人性化格式显示（如 6 分 00 秒），原始毫秒保留在 run.json 与悬停提示中。
+- 文本模式与契约版本不匹配时，页面顶部显示显著降级横幅；文本模式的证据强度上限说明见 references/input-contract.md。
 - 无复验记录的主张显示「未验证」；Automation 投递只显示「已投递」。
 
 ## 注意事项
 
 - 证据等级只由脚本按检查记录确定性判定，叙事文件中不得携带或修改等级；等级定义见 references/evidence-model.md。
-- 脱敏残留扫描为硬门：不通过即非零退出且不产出任何文件。
+- 脱敏残留扫描为硬门：不通过即非零退出且不产出任何文件。残留扫描是**两套独立机制**：
+  （1）规则复检——把生效脱敏规则在最终产物上重跑一遍（占位符不计），验证替换确实生效；
+  （2）独立宽形态探测（RESIDUAL_SUSPICIOUS）——检测集刻意比替换集宽、且不同源，只查不改，
+  专用于发现「替换规则漏掉了什么」。默认 `--strict-pii` 开启，形态探测命中即 exit 5 不落盘
+  （fail-closed，要求使用者清洗输入后重建）；`--no-strict-pii` 时放行，但逐条记 `PII_SUSPECTED`
+  警告（含 JSON 路径 source_ref），由使用者自行复核清洗。
+- URL 分级脱敏（默认档）：保留 http(s) 的 host+path 作为引用出处，抹除 query（可能携带
+  token）与内网域名（corp / internal / intra / local / lan / office）；URL 内嵌凭据一律抹除。
+  `--no-urls` 恢复全抹（旧行为）；`--keep-urls` 连 query 与内网域名也放行，仅保留凭据兜底。
+  残留扫描相应只对「带 userinfo 凭据的外链」与文件协议（file scheme）外链保持绝对禁止，普通外链放行。
+  独立形态探测兜底：query 中的高风险键（access_token / token / secret / api_key /
+  apikey / session / sid / auth / code 等）一旦出现在可分享产物中，默认 strict 模式
+  exit 5（含 keep-urls 档显式保留的 query）；需清洗输入或改用 `--no-strict-pii`。
+- PII 规则覆盖私钥块、中国身份证、中国手机号、银行卡、IPv4、邮箱与「密码/口令/password」
+  前缀的自然语言明文凭据；姓名、公司名等自然语言实体不在自动脱敏范围，请用
+  `--denylist <文件>` 提供词条（命中替换为 [REDACTED:R-DENYLIST]，计入审计报告）。
+  长数字形态探测可能对 11 位以上流水号/时间戳误报（默认硬门拦截），属「宁多脱不少漏」的
+  有意取舍；确需放行请使用 `--no-strict-pii` 并按 PII_SUSPECTED 警告逐条复核。
 - 当前无真实 DSH 导出样本，验收基于符合官方契约的人工构造样例；真实样本验证待用户提供导出后补充，适配说明与已知限制见 references/dsh-export.md。
 - 脚本资源以技能目录为基准（内部按脚本自身位置解析），与调用时的工作目录无关。
 - CLI 子命令、退出码与运行模型字段见 references/api_reference.md。
@@ -64,4 +84,4 @@ agent_created: true
 ## 自检与示例
 
 - 结构自检：`python scripts/casebook.py --selftest`；回归集：`python scripts/casebook.py --fixtures`，样本定义在 tests/fixtures/fixtures.json。
-- examples/ 目录提供三个人工案例（bugfix / research-report / data-analysis），可用 `python scripts/example.py --out <目录>` 一键演示；构建产物不随技能分发。
+- examples/ 目录提供三个人工案例（bugfix / research-report / data-analysis），可用 `python scripts/example.py --out <目录>` 一键演示；01-bugfix 为「完整模式 + 有叙事」的主推示例（含 narrative.json）；构建产物不随技能分发。

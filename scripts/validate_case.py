@@ -29,7 +29,11 @@ _FACT_FILE_RE = re.compile(
     r"\b[A-Za-z0-9_\-][A-Za-z0-9_\-.]*\."
     r"(?:py|json|jsonl|md|csv|txt|html|htm|zip|png|jpg|jpeg|svg|log|yaml|yml|toml)\b")
 _FACT_NUM_RE = re.compile(
-    r"\d+(?:\.\d+)?\s*(?:ms|s\b|\u79d2|tokens?|\u5143|%|\u6b21|\u4e2a|\u6761|\u884c)")
+    r"\d+(?:\.\d+)?\s*(?:ms|分钟|分|小时|秒|s\b|天|周|个月|年"
+    r"|tokens?|美元|元|刀|倍|%|次|个|条|行|GB|MB|KB)", re.I)
+# 汉字数字 + 单位（覆盖「两小时」「十次」「三百元」这类写法）
+_FACT_CN_NUM_RE = re.compile(
+    r"[一二三四五六七八九十百千万两]+(?:分钟|小时|天|周|个月|年|倍|元|美元|次|个|条|行)")
 
 
 def _fact_candidates(text):
@@ -41,6 +45,8 @@ def _fact_candidates(text):
         if len(tok) >= 3:
             out.add(tok)
     for m in _FACT_NUM_RE.finditer(text):
+        out.add(m.group(0))
+    for m in _FACT_CN_NUM_RE.finditer(text):
         out.add(m.group(0))
     return sorted(out)
 
@@ -107,6 +113,10 @@ def validate_schema(run):
             violations.append({"code": "E-SCHEMA", "path": "$." + key,
                                "detail": "id 重复: {}".format(", ".join(map(str, dup)))})
     for item in run["claims"]:
+        if item.get("claim_origin") not in rm.CLAIM_ORIGINS:
+            violations.append({"code": "E-SCHEMA", "path": "$.claims[].claim_origin",
+                               "detail": "claim_origin 必须为 marker 或 statement: {}".format(
+                                   item.get("claim_origin"))})
         if item.get("evidence_level") not in rm.EVIDENCE_LEVELS:
             violations.append({"code": "E-SCHEMA", "path": "$.claims[].evidence_level",
                                "detail": "证据等级不在五级词表内: {}".format(item.get("evidence_level"))})
@@ -212,12 +222,13 @@ def validate_narrative(run, narrative):
 
     full_text = "\n".join(t for t in texts if t)
 
-    # 规则 3：narrative 不得出现证据等级字样——等级只由页面从 run.json 渲染
-    low = full_text.lower()
-    for word in rm.NARRATIVE_LEVEL_WORDS:
-        if word in (full_text if not word.isascii() else low):
+    # 规则 3：narrative 不得出现证据等级字样——等级只由页面从 run.json 渲染。
+    # v1.1.0：词表子串匹配升级为正则模式（A 类专名出现即违规，B 类仅验收语境违规）
+    for pat in rm.NARRATIVE_LEVEL_PATTERNS:
+        m = re.search(pat, full_text, re.I)
+        if m:
             violations.append({"code": "E-NARR-LEVEL", "path": "narrative",
-                               "detail": "叙事出现证据等级字样（等级只由脚本判定）: {}".format(word)})
+                               "detail": "叙事出现证据等级字样（等级只由脚本判定）: {}".format(m.group(0))})
 
     # 规则 2：事实候选必须能在事实集中找到完全一致项——新增即拒
     corpus = _fact_corpus(run)
